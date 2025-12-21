@@ -133,7 +133,8 @@ class ChannelReader:
             
             # Get source type
             source_type = channel_info.get('source_type', 'telegram_bot')
-            source_config = self.db.get_channel_source_config(channel_id) or {}
+            source_config_data = self.db.get_channel_source_config(channel_id)
+            source_config = source_config_data.get('source_config', {}) if source_config_data else {}
             
             logger.info(f"Starting force parse for channel {channel_username} (ID: {channel_id}, "
                        f"source: {source_type}, limit={limit}, days={days})")
@@ -143,8 +144,14 @@ class ChannelReader:
             
             # Use parser manager for non-telegram_bot sources
             if source_type != 'telegram_bot':
-                # Normalize username
+                # For RSS sources, use rss_url from source_config if available
                 username = channel_username
+                if source_type == 'rss' and source_config and isinstance(source_config, dict):
+                    rss_url = source_config.get('rss_url')
+                    if rss_url:
+                        username = rss_url
+                
+                # Normalize username (don't strip @ if it's a URL)
                 if username and not username.startswith('http'):
                     username = username.lstrip('@')
                 

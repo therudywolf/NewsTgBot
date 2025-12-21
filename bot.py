@@ -2,9 +2,10 @@
 import asyncio
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict
+from typing import List, Dict, Optional
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, TypeHandler
 import config
@@ -13,6 +14,8 @@ import channel_reader
 import deduplicator
 import llm_client
 import scheduler
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +31,29 @@ class NewsBot:
         self.deduplicator = deduplicator.Deduplicator(self.llm_client)
         self.scheduler = scheduler.Scheduler()
         self.app = None
+        self.default_sources = self._load_default_sources()
+    
+    def _load_default_sources(self) -> Dict:
+        """Load default sources from JSON file."""
+        default_sources_path = os.path.join(os.path.dirname(__file__), "default_sources.json")
+        try:
+            if os.path.exists(default_sources_path):
+                with open(default_sources_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            else:
+                logger.warning(f"Default sources file not found at {default_sources_path}")
+                return {"categories": {}}
+        except Exception as e:
+            logger.error(f"Error loading default sources: {e}")
+            return {"categories": {}}
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command."""
-        welcome_message = """Привет! Я бот для агрегации новостей из Telegram каналов.
+        welcome_message = """👋 Привет! Я бот для агрегации новостей.
 
-Используй кнопки ниже для навигации или команды для быстрого доступа."""
+📰 Я собираю новости из различных источников (RSS, Telegram каналы) и создаю краткие сводки.
+
+🎯 Выберите действие ниже:"""
         
         keyboard = self._create_main_keyboard()
         await update.message.reply_text(
@@ -44,9 +64,9 @@ class NewsBot:
     def _create_main_keyboard(self) -> ReplyKeyboardMarkup:
         """Create main reply keyboard."""
         keyboard = [
-            ["📋 Каналы", "🔍 Поиск каналов"],
-            ["📰 Новости", "🏷️ Теги"],
-            ["⚙️ Настройки", "📊 Статистика"]
+            ["➕ Добавить источники", "📰 Получить новости"],
+            ["📋 Мои источники", "📊 Статистика"],
+            ["⚙️ Настройки"]
         ]
         return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
@@ -92,12 +112,70 @@ class NewsBot:
         """Create inline keyboard for period selection."""
         buttons = [
             [
-                InlineKeyboardButton("1 день", callback_data="period:1d"),
-                InlineKeyboardButton("7 дней", callback_data="period:7d"),
-                InlineKeyboardButton("30 дней", callback_data="period:30d")
+                InlineKeyboardButton("📅 1 день", callback_data="period:1d"),
+                InlineKeyboardButton("📅 7 дней", callback_data="period:7d")
             ],
-            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            [
+                InlineKeyboardButton("📅 30 дней", callback_data="period:30d")
+            ],
+            [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
         ]
+        return InlineKeyboardMarkup(buttons)
+    
+    def _create_add_sources_keyboard(self) -> InlineKeyboardMarkup:
+        """Create keyboard for adding sources menu."""
+        buttons = []
+        
+        # Add category buttons
+        categories = self.default_sources.get("categories", {})
+        if categories:
+            buttons.append([InlineKeyboardButton("📚 Предустановленные источники", callback_data="default_sources_menu")])
+        
+        buttons.append([InlineKeyboardButton("🔗 Добавить вручную", callback_data="add_manual_source")])
+        buttons.append([InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")])
+        
+        return InlineKeyboardMarkup(buttons)
+    
+    def _create_categories_keyboard(self) -> InlineKeyboardMarkup:
+        """Create keyboard for source categories."""
+        buttons = []
+        categories = self.default_sources.get("categories", {})
+        
+        for category_id, category_data in categories.items():
+            category_name = category_data.get("name", category_id)
+            buttons.append([
+                InlineKeyboardButton(category_name, callback_data=f"category:{category_id}")
+            ])
+        
+        buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="default_sources_menu")])
+        return InlineKeyboardMarkup(buttons)
+    
+    def _create_category_sources_keyboard(self, category_id: str) -> InlineKeyboardMarkup:
+        """Create keyboard for sources in a category."""
+        buttons = []
+        categories = self.default_sources.get("categories", {})
+        category_data = categories.get(category_id, {})
+        sources = category_data.get("sources", [])
+        
+        existing_channels = {ch.get('username'): ch.get('channel_id') for ch in self.db.get_all_channels()}
+        
+        for source in sources:
+            title = source.get("title", "Unknown")
+            username = source.get("username", "")
+            source_type = source.get("source_type", "rss")
+            
+            # Check if already added
+            is_added = username in existing_channels
+            prefix = "✅ " if is_added else ""
+            
+            buttons.append([
+                InlineKeyboardButton(
+                    f"{prefix}{title}",
+                    callback_data=f"add_default_source:{category_id}:{username}"
+                )
+            ])
+        
+        buttons.append([InlineKeyboardButton("🔙 К категориям", callback_data="default_sources_menu")])
         return InlineKeyboardMarkup(buttons)
     
     def _create_source_type_keyboard(self, channel_id: int, is_change: bool = False) -> InlineKeyboardMarkup:
@@ -151,7 +229,7 @@ class NewsBot:
         if nav_buttons:
             buttons.append(nav_buttons)
         
-        buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
+        buttons.append([InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")])
         return InlineKeyboardMarkup(buttons)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -492,11 +570,7 @@ class NewsBot:
         self._current_context_bot = context.bot
         
         if data == "main_menu":
-            await query.message.reply_text(
-                "Главное меню",
-                reply_markup=self._create_main_keyboard()
-            )
-            await query.message.delete()
+            await self._show_main_menu_inline(query)
         elif data == "list_channels":
             await self._show_channels_list_callback(query)
         elif data.startswith("channel_info:"):
@@ -719,7 +793,7 @@ class NewsBot:
             message += f"\nПоследняя новость: {latest.strftime('%Y-%m-%d %H:%M')}"
         
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+            InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")
         ]])
         await query.edit_message_text(message, reply_markup=keyboard)
     
@@ -800,32 +874,18 @@ class NewsBot:
         """Handle text messages (reply keyboard buttons)."""
         text = update.message.text
         
-        if text == "📋 Каналы":
+        if text == "➕ Добавить источники":
+            await self._show_add_sources_menu(update)
+        elif text == "📰 Получить новости":
+            await self._show_news_period_menu(update)
+        elif text == "📋 Мои источники":
             await self._show_channels_list(update)
-        elif text == "🔍 Поиск каналов":
-            await update.message.reply_text(
-                "🔍 Поиск каналов\n\n"
-                "Введите username канала (например: @channel_name) или ссылку (https://t.me/channel_name) "
-                "для добавления канала в отслеживание.\n\n"
-                "Также можно использовать команду: /add_channel <ссылка>"
-            )
-        elif text == "📰 Новости":
-            keyboard = self._create_period_keyboard()
-            await update.message.reply_text("Выберите период для новостей:", reply_markup=keyboard)
-        elif text == "🏷️ Теги":
-            await self._show_tags_list_text(update)
-        elif text == "⚙️ Настройки":
-            # Show parsers status
-            message = "⚙️ Настройки\n\nДоступные опции:"
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📊 Статус парсеров", callback_data="parsers_status")],
-                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-            ])
-            await update.message.reply_text(message, reply_markup=keyboard)
         elif text == "📊 Статистика":
             await self._show_global_stats_text(update)
+        elif text == "⚙️ Настройки":
+            await self._show_settings_menu(update)
         else:
-            # Try to search/add channel
+            # Try to search/add channel manually
             await self._try_add_channel(update, text)
     
     async def _show_tags_list_text(self, update: Update):
@@ -999,7 +1059,7 @@ class NewsBot:
             message += f"{parser_name}: {status}\n"
         
         keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+            InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")
         ]])
         await query.edit_message_text(message, reply_markup=keyboard)
     
@@ -1074,6 +1134,135 @@ class NewsBot:
             await query.message.reply_text("Выберите действие:", reply_markup=keyboard)
         else:
             await query.edit_message_text("❌ Ошибка при удалении канала.")
+    
+    async def _show_add_sources_menu(self, update: Update):
+        """Show menu for adding sources."""
+        message = "➕ Добавление источников\n\nВыберите способ добавления:"
+        keyboard = self._create_add_sources_keyboard()
+        await update.message.reply_text(message, reply_markup=keyboard)
+    
+    async def _show_news_period_menu(self, update: Update):
+        """Show menu for selecting news period."""
+        message = "📰 Получить новости\n\nВыберите период:"
+        keyboard = self._create_period_keyboard()
+        await update.message.reply_text(message, reply_markup=keyboard)
+    
+    async def _show_settings_menu(self, update: Update):
+        """Show settings menu."""
+        message = "⚙️ Настройки\n\nВыберите опцию:"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📊 Статус парсеров", callback_data="parsers_status")],
+            [InlineKeyboardButton("🔙 Главное меню", callback_data="main_menu")]
+        ])
+        await update.message.reply_text(message, reply_markup=keyboard)
+    
+    async def _show_main_menu_inline(self, query):
+        """Show main menu as inline message."""
+        message = "👋 Главное меню\n\nВыберите действие:"
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Добавить источники", callback_data="default_sources_menu")],
+            [InlineKeyboardButton("📰 Получить новости", callback_data="show_news_period")],
+            [InlineKeyboardButton("📋 Мои источники", callback_data="list_channels")],
+            [InlineKeyboardButton("📊 Статистика", callback_data="global_stats")]
+        ])
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _show_categories_menu(self, query):
+        """Show categories menu."""
+        categories = self.default_sources.get("categories", {})
+        if not categories:
+            await query.edit_message_text("❌ Предустановленные источники не найдены.")
+            return
+        
+        message = "📚 Категории источников\n\nВыберите категорию:"
+        keyboard = self._create_categories_keyboard()
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _show_category_sources(self, query, category_id: str):
+        """Show sources in a category."""
+        categories = self.default_sources.get("categories", {})
+        category_data = categories.get(category_id, {})
+        
+        if not category_data:
+            await query.answer("Категория не найдена", show_alert=True)
+            return
+        
+        category_name = category_data.get("name", category_id)
+        sources = category_data.get("sources", [])
+        
+        message = f"{category_name}\n\nДоступные источники:\n\n"
+        existing_channels = {ch.get('username'): True for ch in self.db.get_all_channels()}
+        
+        for source in sources:
+            title = source.get("title", "Unknown")
+            username = source.get("username", "")
+            is_added = username in existing_channels
+            status = "✅ Добавлен" if is_added else "➕ Добавить"
+            message += f"• {title} - {status}\n"
+        
+        keyboard = self._create_category_sources_keyboard(category_id)
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _handle_add_default_source(self, query, category_id: str, username: str):
+        """Handle adding a default source."""
+        categories = self.default_sources.get("categories", {})
+        category_data = categories.get(category_id, {})
+        sources = category_data.get("sources", [])
+        
+        # Find the source
+        source_data = None
+        for source in sources:
+            if source.get("username") == username:
+                source_data = source
+                break
+        
+        if not source_data:
+            await query.answer("Источник не найден", show_alert=True)
+            return
+        
+        title = source_data.get("title", username)
+        source_type = source_data.get("source_type", "rss")
+        source_config = source_data.get("source_config", {})
+        
+        # For RSS sources, use rss_url as username if available
+        if source_type == "rss" and source_config.get("rss_url"):
+            # Use RSS URL as the identifier for RSS parser
+            username = source_config.get("rss_url")
+        
+        # Generate channel_id (hash of username/url)
+        channel_id = hash(username) % (10 ** 9)
+        
+        # Check if already exists
+        existing = self.db.get_channel_by_id(channel_id)
+        if existing:
+            await query.answer(f"✅ {title} уже добавлен", show_alert=True)
+            return
+        
+        # Add to database
+        success = self.db.add_channel(channel_id, username, title, source_type=source_type)
+        if success and source_config:
+            self.db.update_channel_source_type(channel_id, source_type, source_config)
+        
+        if success:
+            logger.info(f"Default source added: {title} (@{username}, ID: {channel_id}, source: {source_type})")
+            source_emoji = {'telethon': '📱', 'web': '🌐', 'rss': '📡', 'telegram_bot': '🤖'}.get(source_type, '📺')
+            await query.answer(f"✅ {title} добавлен ({source_emoji})", show_alert=True)
+            # Refresh the category sources list
+            await self._show_category_sources(query, category_id)
+        else:
+            await query.answer("❌ Ошибка при добавлении", show_alert=True)
+    
+    async def _handle_add_manual_source(self, query):
+        """Handle manual source addition."""
+        await query.edit_message_text(
+            "🔗 Добавление источника вручную\n\n"
+            "Введите username канала или RSS ссылку:\n\n"
+            "Примеры:\n"
+            "• @channel_name\n"
+            "• https://t.me/channel_name\n"
+            "• https://example.com/rss\n\n"
+            "Или используйте команду: /add_channel <ссылка>"
+        )
     
     async def periodic_check(self):
         """Periodic check for new messages (placeholder - messages come via handlers)."""

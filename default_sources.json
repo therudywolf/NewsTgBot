@@ -1,0 +1,84 @@
+{
+  "categories": {
+    "it": {
+      "name": "💻 IT и технологии",
+      "sources": [
+        {
+          "title": "Habr",
+          "username": "habr",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://habr.com/ru/rss/all/all/"
+          }
+        },
+        {
+          "title": "TechCrunch",
+          "username": "techcrunch",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://techcrunch.com/feed/"
+          }
+        },
+        {
+          "title": "Ars Technica",
+          "username": "arstechnica",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://feeds.arstechnica.com/arstechnica/index"
+          }
+        }
+      ]
+    },
+    "auto": {
+      "name": "🚗 Автомобили",
+      "sources": [
+        {
+          "title": "Motor.ru",
+          "username": "motor_ru",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://motor.ru/rss/all.xml"
+          }
+        },
+        {
+          "title": "Autonews",
+          "username": "autonews",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.autonews.ru/rss"
+          }
+        }
+      ]
+    },
+    "security": {
+      "name": "🔒 Безопасность и хаккинг",
+      "sources": [
+        {
+          "title": "SecurityLab",
+          "username": "securitylab",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.securitylab.ru/_services/export/rss/news/"
+          }
+        },
+        {
+          "title": "The Hacker News",
+          "username": "hackernews",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://feeds.feedburner.com/TheHackersNews"
+          }
+        },
+        {
+          "title": "Xakep",
+          "username": "xakep",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://xakep.ru/feed/"
+          }
+        }
+      ]
+    }
+  }
+}
+
