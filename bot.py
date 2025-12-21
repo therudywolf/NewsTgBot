@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta
 from typing import List, Dict
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
-from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes, TypeHandler
 import config
 import database
 import channel_reader
@@ -276,7 +276,9 @@ class NewsBot:
         for idx, channel in enumerate(channels, 1):
             username = channel.get('username', 'N/A')
             title = channel.get('title', 'N/A')
-            message += f"{idx}. {title} (@{username})\n"
+            source_type = channel.get('source_type', 'telegram_bot')
+            source_emoji = {'telethon': '📱', 'web': '🌐', 'rss': '📡', 'telegram_bot': '🤖'}.get(source_type, '📺')
+            message += f"{idx}. {source_emoji} {title} (@{username})\n"
         
         keyboard = self._create_channels_inline_keyboard(channels)
         await update.message.reply_text(message, reply_markup=keyboard)
@@ -500,7 +502,9 @@ class NewsBot:
         for idx, channel in enumerate(channels, 1):
             username = channel.get('username', 'N/A')
             title = channel.get('title', 'N/A')
-            message += f"{idx}. {title} (@{username})\n"
+            source_type = channel.get('source_type', 'telegram_bot')
+            source_emoji = {'telethon': '📱', 'web': '🌐', 'rss': '📡', 'telegram_bot': '🤖'}.get(source_type, '📺')
+            message += f"{idx}. {source_emoji} {title} (@{username})\n"
         
         keyboard = self._create_channels_inline_keyboard(channels)
         await query.edit_message_text(message, reply_markup=keyboard)
@@ -533,23 +537,25 @@ class NewsBot:
         """Handle parse channel request."""
         await query.edit_message_text("⏳ Парсинг канала...")
         
-        # #region agent log
-        import json; f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "bot.py:526", "message": "_handle_parse_channel entry", "data": {"channel_id": channel_id, "has_query_message": query.message is not None, "has_context": context is not None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
-        # #endregion
-        
         try:
-            # Get bot from context (stored in button_handler) or use app.bot
-            bot = getattr(self, '_current_context_bot', None) or (context.bot if context else None) or self.app.bot
+            # Get channel info to determine username
+            channel_info = self.db.get_channel_by_id(channel_id)
+            if not channel_info:
+                await query.edit_message_text("❌ Канал не найден")
+                return
             
-            # #region agent log
-            f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "bot.py:535", "message": "bot object check", "data": {"bot_type": str(type(bot)) if bot else "None", "has_bot": bot is not None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
-            # #endregion
+            channel_username = channel_info.get('username')
             
-            if not bot:
-                raise AttributeError("Cannot get bot instance")
+            # Get bot from context (for telegram_bot source type)
+            bot = getattr(self, '_current_context_bot', None) or (context.bot if context else None) or (self.app.bot if self.app else None)
             
+            # Parse channel using channel_reader (which handles source_type internally)
             stats = await self.channel_reader.force_parse_channel(
-                bot, channel_id, limit=1000, days=30
+                bot=bot,
+                channel_id=channel_id,
+                channel_username=channel_username,
+                limit=1000,
+                days=30
             )
             
             message = f"✅ Парсинг завершен!\n\n"
@@ -585,8 +591,13 @@ class NewsBot:
         for channel in channels:
             try:
                 channel_id = channel.get('channel_id')
+                channel_username = channel.get('username')
                 stats = await self.channel_reader.force_parse_channel(
-                    bot, channel_id, limit=500, days=7
+                    bot=bot,
+                    channel_id=channel_id,
+                    channel_username=channel_username,
+                    limit=500,
+                    days=7
                 )
                 total_parsed += stats['parsed']
             except Exception as e:
@@ -786,7 +797,7 @@ class NewsBot:
             channel_id = chat.id
             title = chat.title or username
             
-            success = self.db.add_channel(channel_id, username, title)
+            success = self.db.add_channel(channel_id, username, title, source_type='telegram_bot')
             self._add_channel_to_json(channel_id, username, title)
             
             if success:
@@ -823,11 +834,33 @@ class NewsBot:
             MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message)
         )
         
-        # Handle channel messages (messages from channels/groups)
-        # Note: Channel posts come as channel_post, not message
+        # Handle channel messages
+        # IMPORTANT: In python-telegram-bot 20.7, MessageHandler with ChatType.CHANNEL
+        # should handle channel_post automatically, but it may not work correctly.
+        # We add an explicit handler for channel_post as fallback using TypeHandler
+        async def handle_channel_post_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+            """Handle channel_post updates explicitly."""
+            if update.channel_post:
+                # #region agent log
+                import json; f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "bot.py:834", "message": "TypeHandler caught channel_post", "data": {"has_channel_post": update.channel_post is not None, "chat_id": update.channel_post.chat.id if update.channel_post and update.channel_post.chat else None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+                # #endregion
+                await self.handle_channel_message(update, context)
+        
+        # Add TypeHandler to catch channel_post updates explicitly (group=-1 to run first)
+        self.app.add_handler(TypeHandler(Update, handle_channel_post_update), group=-1)
+        
+        # Handle channel posts via MessageHandler (should work but may not)
         self.app.add_handler(
             MessageHandler(
-                filters.ChatType.CHANNEL | filters.ChatType.SUPERGROUP,
+                filters.ChatType.CHANNEL,
+                self.handle_channel_message
+            )
+        )
+        
+        # Handle supergroup messages (these come as message, not channel_post)
+        self.app.add_handler(
+            MessageHandler(
+                filters.ChatType.SUPERGROUP,
                 self.handle_channel_message
             )
         )

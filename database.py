@@ -118,19 +118,63 @@ class Database:
         except sqlite3.OperationalError:
             pass  # Column already exists
         
+        # Migration: add source_type column to channels table if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE channels ADD COLUMN source_type TEXT DEFAULT 'telegram_bot'")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        
+        # Create sources table for additional source configuration
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                source_type TEXT NOT NULL,
+                source_config TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY (channel_id) REFERENCES channels(channel_id) ON DELETE CASCADE,
+                UNIQUE(channel_id)
+            )
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sources_channel 
+            ON sources(channel_id)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_sources_type 
+            ON sources(source_type)
+        """)
+        
         conn.commit()
         conn.close()
     
-    def add_channel(self, channel_id: int, username: str = None, title: str = None) -> bool:
-        """Add a channel to the database."""
+    def add_channel(
+        self, 
+        channel_id: int, 
+        username: str = None, 
+        title: str = None,
+        source_type: str = 'telegram_bot'
+    ) -> bool:
+        """
+        Add a channel to the database.
+        
+        Args:
+            channel_id: Channel ID
+            username: Channel username
+            title: Channel title
+            source_type: Source type (default: 'telegram_bot')
+        """
         conn = self._get_connection()
         cursor = conn.cursor()
         
         try:
             cursor.execute("""
-                INSERT OR IGNORE INTO channels (channel_id, username, title, added_date)
-                VALUES (?, ?, ?, ?)
-            """, (channel_id, username, title, datetime.now().isoformat()))
+                INSERT OR IGNORE INTO channels (channel_id, username, title, added_date, source_type)
+                VALUES (?, ?, ?, ?, ?)
+            """, (channel_id, username, title, datetime.now().isoformat(), source_type))
             conn.commit()
             return cursor.rowcount > 0
         except sqlite3.Error as e:
@@ -161,7 +205,11 @@ class Database:
         conn = self._get_connection()
         cursor = conn.cursor()
         
-        cursor.execute("SELECT channel_id, username, title, added_date FROM channels")
+        cursor.execute("""
+            SELECT channel_id, username, title, added_date, 
+                   COALESCE(source_type, 'telegram_bot') as source_type 
+            FROM channels
+        """)
         rows = cursor.fetchall()
         conn.close()
         
@@ -173,7 +221,8 @@ class Database:
         cursor = conn.cursor()
         
         cursor.execute("""
-            SELECT channel_id, username, title, added_date 
+            SELECT channel_id, username, title, added_date,
+                   COALESCE(source_type, 'telegram_bot') as source_type
             FROM channels WHERE channel_id = ?
         """, (channel_id,))
         row = cursor.fetchone()
@@ -522,4 +571,114 @@ class Database:
         conn.close()
         
         return count
+    
+    def update_channel_source_type(
+        self, 
+        channel_id: int, 
+        source_type: str, 
+        source_config: Dict[str, Any] = None
+    ) -> bool:
+        """
+        Update channel source type and configuration.
+        
+        Args:
+            channel_id: Channel ID
+            source_type: Source type ('telegram_bot', 'telethon', 'web', 'rss')
+            source_config: Optional configuration dict (will be stored as JSON)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        try:
+            # Update source_type in channels table
+            cursor.execute("""
+                UPDATE channels SET source_type = ? WHERE channel_id = ?
+            """, (source_type, channel_id))
+            
+            # Update or insert source configuration
+            config_json = json.dumps(source_config) if source_config else None
+            now = datetime.now().isoformat()
+            
+            cursor.execute("""
+                INSERT INTO sources (channel_id, source_type, source_config, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(channel_id) DO UPDATE SET
+                    source_type = excluded.source_type,
+                    source_config = excluded.source_config,
+                    updated_at = excluded.updated_at
+            """, (channel_id, source_type, config_json, now, now))
+            
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error updating channel source type: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+    
+    def get_channels_by_source_type(self, source_type: str) -> List[Dict[str, Any]]:
+        """
+        Get all channels with specified source type.
+        
+        Args:
+            source_type: Source type to filter by
+            
+        Returns:
+            List of channel dictionaries
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT channel_id, username, title, added_date, 
+                   COALESCE(source_type, 'telegram_bot') as source_type
+            FROM channels 
+            WHERE COALESCE(source_type, 'telegram_bot') = ?
+        """, (source_type,))
+        rows = cursor.fetchall()
+        conn.close()
+        
+        return [dict(row) for row in rows]
+    
+    def get_channel_source_config(self, channel_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Get channel source configuration.
+        
+        Args:
+            channel_id: Channel ID
+            
+        Returns:
+            Dict with source_type and source_config, or None if not found
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        # Try to get from sources table first
+        cursor.execute("""
+            SELECT source_type, source_config FROM sources WHERE channel_id = ?
+        """, (channel_id,))
+        row = cursor.fetchone()
+        
+        if row:
+            source_type = row['source_type']
+            source_config = json.loads(row['source_config']) if row['source_config'] else {}
+            conn.close()
+            return {'source_type': source_type, 'source_config': source_config}
+        
+        # Fallback to channels table
+        cursor.execute("""
+            SELECT COALESCE(source_type, 'telegram_bot') as source_type 
+            FROM channels WHERE channel_id = ?
+        """, (channel_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if row:
+            return {'source_type': row['source_type'], 'source_config': {}}
+        
+        return None
 
