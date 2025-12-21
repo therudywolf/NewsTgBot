@@ -79,7 +79,10 @@ class NewsBot:
                 InlineKeyboardButton("📊 Статистика", callback_data=f"channel_stats:{channel_id}")
             ],
             [
-                InlineKeyboardButton("❌ Удалить", callback_data=f"confirm_remove:{channel_id}"),
+                InlineKeyboardButton("⚙️ Изменить источник", callback_data=f"change_source_menu:{channel_id}"),
+                InlineKeyboardButton("❌ Удалить", callback_data=f"confirm_remove:{channel_id}")
+            ],
+            [
                 InlineKeyboardButton("🔙 Назад", callback_data="list_channels")
             ]
         ]
@@ -95,6 +98,31 @@ class NewsBot:
             ],
             [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
         ]
+        return InlineKeyboardMarkup(buttons)
+    
+    def _create_source_type_keyboard(self, channel_id: int, is_change: bool = False) -> InlineKeyboardMarkup:
+        """Create inline keyboard for source type selection."""
+        prefix = "change_source" if is_change else "add_channel_source"
+        buttons = [
+            [
+                InlineKeyboardButton("📱 Telethon", callback_data=f"{prefix}:{channel_id}:telethon"),
+                InlineKeyboardButton("🌐 Web", callback_data=f"{prefix}:{channel_id}:web")
+            ],
+            [
+                InlineKeyboardButton("📡 RSS", callback_data=f"{prefix}:{channel_id}:rss"),
+                InlineKeyboardButton("🤖 Bot API", callback_data=f"{prefix}:{channel_id}:telegram_bot")
+            ]
+        ]
+        
+        if is_change:
+            buttons.append([
+                InlineKeyboardButton("🔙 К каналу", callback_data=f"channel_info:{channel_id}")
+            ])
+        else:
+            buttons.append([
+                InlineKeyboardButton("❌ Отмена", callback_data="cancel_add_channel")
+            ])
+        
         return InlineKeyboardMarkup(buttons)
     
     def _create_tags_keyboard(self, tags: List[Dict], page: int = 0, per_page: int = 10) -> InlineKeyboardMarkup:
@@ -179,37 +207,46 @@ class NewsBot:
             # Try as username without @
             username = channel_input
         
-        # Try to get channel chat info
+        # Try to get channel info - first try bot API, then try parsers
+        channel_id = None
+        title = username
+        
         try:
+            # Try bot API first (works if bot is admin)
             chat = await context.bot.get_chat(f"@{username}" if username else channel_input)
             channel_id = chat.id
             title = chat.title or username
         except Exception as e:
+            # If bot API fails, try to get info via parsers
+            logger.info(f"Bot API failed for {username}, trying parsers: {e}")
+            try:
+                channel_info = await self.channel_reader.parser_manager.get_channel_info(username)
+                if channel_info:
+                    channel_id = channel_info.get('channel_id')
+                    title = channel_info.get('title', username)
+                    # If parser returned channel_id, use it, otherwise generate pseudo ID
+                    if not channel_id:
+                        channel_id = hash(username) % (10 ** 9)
+            except Exception as parser_error:
+                logger.warning(f"Parsers also failed: {parser_error}")
+        
+        if not channel_id:
             await update.message.reply_text(
-                f"Ошибка при добавлении канала: {e}\n"
-                "Убедитесь, что:\n"
-                "1. Канал существует\n"
-                "2. Бот добавлен в канал\n"
-                "3. Вы указали правильную ссылку"
+                f"Ошибка при добавлении канала: не удалось получить информацию о канале.\n"
+                "Попробуйте:\n"
+                "1. Убедиться, что канал существует\n"
+                "2. Для Bot API: добавить бота в канал как администратора\n"
+                "3. Для других источников: убедиться, что парсеры настроены правильно"
             )
             return
         
-        # Add to database
-        success = self.db.add_channel(channel_id, username, title)
+        # Show source selection keyboard
+        message = f"Канал найден: {title} (@{username})\n\nВыберите способ парсинга:"
+        keyboard = self._create_source_type_keyboard(channel_id, is_change=False)
         
-        # Also add to channels.json
-        self._add_channel_to_json(channel_id, username, title)
-        
-        if success:
-            logger.info(f"Channel added: {title} (@{username}, ID: {channel_id})")
-            await update.message.reply_text(
-                f"✅ Канал {title} (@{username}) успешно добавлен!"
-            )
-        else:
-            logger.warning(f"Channel already exists: {title} (@{username}, ID: {channel_id})")
-            await update.message.reply_text(
-                f"⚠️ Канал уже был добавлен ранее."
-            )
+        # Store pending channel info temporarily
+        # We'll use callback to complete the addition
+        await update.message.reply_text(message, reply_markup=keyboard)
     
     async def remove_channel_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /remove_channel command."""
@@ -490,6 +527,26 @@ class NewsBot:
         elif data.startswith("remove_channel:"):
             channel_id = int(data.split(":")[1])
             await self._handle_remove_channel(query, channel_id)
+        elif data.startswith("add_channel_source:"):
+            parts = data.split(":")
+            channel_id = int(parts[1])
+            source_type = parts[2]
+            await self._handle_add_channel_with_source(query, channel_id, source_type)
+        elif data.startswith("change_source:"):
+            parts = data.split(":")
+            channel_id = int(parts[1])
+            source_type = parts[2]
+            await self._handle_change_source(query, channel_id, source_type)
+        elif data == "cancel_add_channel":
+            await query.edit_message_text("Добавление канала отменено.")
+        elif data == "parsers_status":
+            await self._show_parsers_status(query)
+        elif data.startswith("check_parser:"):
+            parser_type = data.split(":")[1]
+            await self._check_parser_status(query, parser_type)
+        elif data.startswith("change_source_menu:"):
+            channel_id = int(data.split(":")[1])
+            await self._show_change_source_menu(query, channel_id)
     
     async def _show_channels_list_callback(self, query):
         """Show channels list from callback."""
@@ -519,6 +576,24 @@ class NewsBot:
         message = f"📺 {channel.get('title', 'N/A')}\n"
         message += f"@{channel.get('username', 'N/A')}\n"
         message += f"ID: {channel_id}\n\n"
+        
+        # Show source type and status
+        source_type = channel.get('source_type', 'telegram_bot')
+        source_emoji = {'telethon': '📱', 'web': '🌐', 'rss': '📡', 'telegram_bot': '🤖'}.get(source_type, '📺')
+        source_name = {'telethon': 'Telethon', 'web': 'Web Scraping', 'rss': 'RSS', 'telegram_bot': 'Bot API'}.get(source_type, source_type)
+        
+        # Check parser availability
+        parser = self.channel_reader.parser_manager.get_parser(source_type)
+        if parser and source_type != 'telegram_bot':
+            try:
+                is_available = await parser.check_availability()
+                status_text = "активен" if is_available else "недоступен"
+            except:
+                status_text = "недоступен"
+        else:
+            status_text = "активен"
+        
+        message += f"Источник: {source_emoji} {source_name} ({status_text})\n\n"
         
         stats = self.db.get_channel_stats(channel_id)
         message += f"📊 Статистика:\n"
@@ -740,7 +815,13 @@ class NewsBot:
         elif text == "🏷️ Теги":
             await self._show_tags_list_text(update)
         elif text == "⚙️ Настройки":
-            await update.message.reply_text("Настройки пока не доступны.")
+            # Show parsers status
+            message = "⚙️ Настройки\n\nДоступные опции:"
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 Статус парсеров", callback_data="parsers_status")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            ])
+            await update.message.reply_text(message, reply_markup=keyboard)
         elif text == "📊 Статистика":
             await self._show_global_stats_text(update)
         else:
@@ -792,20 +873,207 @@ class NewsBot:
         else:
             username = channel_input
         
+        # Try to get channel info - first try bot API, then try parsers
+        channel_id = None
+        title = username
+        
         try:
+            # Try bot API first (works if bot is admin)
             chat = await update.message.bot.get_chat(f"@{username}" if username else channel_input)
             channel_id = chat.id
             title = chat.title or username
+        except Exception as e:
+            # If bot API fails, try to get info via parsers
+            logger.info(f"Bot API failed for {username}, trying parsers: {e}")
+            try:
+                channel_info = await self.channel_reader.parser_manager.get_channel_info(username)
+                if channel_info:
+                    channel_id = channel_info.get('channel_id')
+                    title = channel_info.get('title', username)
+                    # If parser returned channel_id, use it, otherwise generate pseudo ID
+                    if not channel_id:
+                        channel_id = hash(username) % (10 ** 9)
+            except Exception as parser_error:
+                logger.warning(f"Parsers also failed: {parser_error}")
+        
+        if not channel_id:
+            await update.message.reply_text(
+                f"Ошибка: не удалось получить информацию о канале.\n"
+                "Попробуйте убедиться, что канал существует и доступен."
+            )
+            return
+        
+        # Show source selection keyboard
+        message = f"Канал найден: {title} (@{username})\n\nВыберите способ парсинга:"
+        keyboard = self._create_source_type_keyboard(channel_id, is_change=False)
+        await update.message.reply_text(message, reply_markup=keyboard)
+    
+    async def _handle_add_channel_with_source(self, query, channel_id: int, source_type: str):
+        """Handle adding channel with selected source type."""
+        try:
+            # Extract username and title from the previous message text
+            message_text = query.message.text or ""
+            username = None
+            title = None
             
-            success = self.db.add_channel(channel_id, username, title, source_type='telegram_bot')
+            # Try to extract from message text: "Канал найден: {title} (@{username})"
+            import re
+            match = re.search(r'Канал найден:\s*(.+?)\s*\(@(.+?)\)', message_text)
+            if match:
+                title = match.group(1).strip()
+                username = match.group(2).strip()
+            
+            # If not found in message, try bot API
+            if not username or not title:
+                try:
+                    bot = getattr(self, '_current_context_bot', None) or (self.app.bot if self.app else None)
+                    if bot:
+                        chat = await bot.get_chat(channel_id)
+                        username = chat.username or str(channel_id)
+                        title = chat.title or username
+                except Exception as bot_error:
+                    logger.warning(f"Bot API failed for channel {channel_id}: {bot_error}")
+            
+            # Fallback
+            if not username:
+                username = str(channel_id)
+            if not title:
+                title = f"Channel {channel_id}"
+            
+            # Add to database
+            success = self.db.add_channel(channel_id, username, title, source_type=source_type)
+            
+            # Also add to channels.json
             self._add_channel_to_json(channel_id, username, title)
             
             if success:
-                await update.message.reply_text(f"✅ Канал {title} добавлен!")
+                logger.info(f"Channel added: {title} (@{username}, ID: {channel_id}, source: {source_type})")
+                source_emoji = {'telethon': '📱', 'web': '🌐', 'rss': '📡', 'telegram_bot': '🤖'}.get(source_type, '📺')
+                await query.edit_message_text(
+                    f"✅ Канал {title} (@{username}) успешно добавлен!\n"
+                    f"Источник: {source_emoji} {source_type}"
+                )
             else:
-                await update.message.reply_text("⚠️ Канал уже был добавлен ранее.")
+                await query.edit_message_text("⚠️ Канал уже был добавлен ранее.")
         except Exception as e:
-            await update.message.reply_text(f"Ошибка: {e}")
+            logger.error(f"Error adding channel with source: {e}", exc_info=True)
+            await query.edit_message_text(f"❌ Ошибка при добавлении канала: {e}")
+    
+    async def _handle_change_source(self, query, channel_id: int, source_type: str):
+        """Handle changing source type for a channel."""
+        try:
+            success = self.db.update_channel_source_type(channel_id, source_type)
+            if success:
+                source_emoji = {'telethon': '📱', 'web': '🌐', 'rss': '📡', 'telegram_bot': '🤖'}.get(source_type, '📺')
+                await query.edit_message_text(f"✅ Источник изменен на: {source_emoji} {source_type}")
+                # Refresh channel info
+                await self._show_channel_info(query, channel_id)
+            else:
+                await query.edit_message_text("❌ Ошибка при изменении источника.")
+        except Exception as e:
+            logger.error(f"Error changing source: {e}", exc_info=True)
+            await query.edit_message_text(f"❌ Ошибка: {e}")
+    
+    async def _show_parsers_status(self, query):
+        """Show status of all parsers."""
+        parser_statuses = {
+            'telethon': '📱 Telethon',
+            'web': '🌐 Web Scraping',
+            'rss': '📡 RSS',
+            'telegram_bot': '🤖 Bot API'
+        }
+        
+        message = "📊 Статус парсеров:\n\n"
+        for parser_type, parser_name in parser_statuses.items():
+            try:
+                parser = self.channel_reader.parser_manager.get_parser(parser_type)
+                if parser:
+                    is_available = await parser.check_availability()
+                    status = "✅ Доступен" if is_available else "❌ Недоступен"
+                else:
+                    # telegram_bot is conceptual, always available if bot is running
+                    status = "✅ Доступен" if parser_type == 'telegram_bot' else "❌ Не зарегистрирован"
+            except Exception as e:
+                logger.error(f"Error checking {parser_type}: {e}")
+                status = "❌ Ошибка"
+            message += f"{parser_name}: {status}\n"
+        
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+        ]])
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _check_parser_status(self, query, parser_type: str):
+        """Check detailed status of a specific parser."""
+        parser = self.channel_reader.parser_manager.get_parser(parser_type)
+        if not parser:
+            await query.answer(f"Парсер {parser_type} не найден", show_alert=True)
+            return
+        
+        try:
+            is_available = await parser.check_availability()
+            status = "✅ Доступен и готов к работе" if is_available else "❌ Недоступен"
+            await query.answer(status, show_alert=True)
+        except Exception as e:
+            logger.error(f"Error checking parser {parser_type}: {e}")
+            await query.answer(f"❌ Ошибка проверки: {e}", show_alert=True)
+    
+    async def _show_change_source_menu(self, query, channel_id: int):
+        """Show menu for changing channel source."""
+        channel = self.db.get_channel_by_id(channel_id)
+        if not channel:
+            await query.answer("Канал не найден", show_alert=True)
+            return
+        
+        title = channel.get('title', 'N/A')
+        current_source = channel.get('source_type', 'telegram_bot')
+        source_emoji = {'telethon': '📱', 'web': '🌐', 'rss': '📡', 'telegram_bot': '🤖'}.get(current_source, '📺')
+        
+        message = f"📺 {title}\n\nТекущий источник: {source_emoji} {current_source}\n\nВыберите новый источник:"
+        keyboard = self._create_source_type_keyboard(channel_id, is_change=True)
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _confirm_remove_channel(self, query, channel_id: int):
+        """Show confirmation dialog for channel removal."""
+        channel = self.db.get_channel_by_id(channel_id)
+        if not channel:
+            await query.answer("Канал не найден", show_alert=True)
+            return
+        
+        title = channel.get('title', 'N/A')
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Да, удалить", callback_data=f"remove_channel:{channel_id}"),
+                InlineKeyboardButton("❌ Отмена", callback_data=f"channel_info:{channel_id}")
+            ]
+        ])
+        await query.edit_message_text(
+            f"⚠️ Вы уверены, что хотите удалить канал '{title}'?",
+            reply_markup=keyboard
+        )
+    
+    async def _handle_remove_channel(self, query, channel_id: int):
+        """Handle channel removal."""
+        channel = self.db.get_channel_by_id(channel_id)
+        if not channel:
+            await query.answer("Канал не найден", show_alert=True)
+            return
+        
+        title = channel.get('title', 'N/A')
+        success = self.db.remove_channel(channel_id)
+        self._remove_channel_from_json(channel_id)
+        
+        if success:
+            logger.info(f"Channel removed: ID {channel_id}")
+            await query.edit_message_text(f"✅ Канал '{title}' успешно удален!")
+            
+            # Show channels list after removal
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 К каналам", callback_data="list_channels")
+            ]])
+            await query.message.reply_text("Выберите действие:", reply_markup=keyboard)
+        else:
+            await query.edit_message_text("❌ Ошибка при удалении канала.")
     
     async def periodic_check(self):
         """Periodic check for new messages (placeholder - messages come via handlers)."""
