@@ -358,7 +358,7 @@ class NewsBot:
         # Handle channel messages (messages from channels/groups)
         self.app.add_handler(
             MessageHandler(
-                filters.ChatType.CHANNELS | filters.ChatType.GROUPS,
+                filters.ChatType.CHANNEL | filters.ChatType.SUPERGROUP,
                 self.handle_channel_message
             )
         )

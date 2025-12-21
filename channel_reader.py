@@ -2,6 +2,7 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from telegram import Update, Message
+from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 import database
 
@@ -20,7 +21,7 @@ class ChannelReader:
         """Process a single message from a channel."""
         try:
             # Check if message is from a channel
-            if not message.chat or message.chat.type not in ['channel', 'supergroup']:
+            if not message.chat or message.chat.type not in [ChatType.CHANNEL, ChatType.SUPERGROUP]:
                 return False
             
             # Get channel ID
