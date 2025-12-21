@@ -1,5 +1,4 @@
 """Main bot file for Telegram News Aggregator."""
-import asyncio
 import json
 import logging
 import os
@@ -14,8 +13,6 @@ import channel_reader
 import deduplicator
 import llm_client
 import scheduler
-
-logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -481,22 +478,11 @@ class NewsBot:
         # Handle channel_post (messages from channels) or message (for supergroups)
         message = update.channel_post or update.message
         
-        # #region agent log
-        import json; f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "bot.py:362", "message": "handle_channel_message entry", "data": {"has_message": update.message is not None, "has_channel_post": update.channel_post is not None, "has_processed_message": message is not None, "chat_id": message.chat.id if message and message.chat else None, "chat_type": str(message.chat.type) if message and message.chat else None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
-        # #endregion
-        
         if not message:
-            # #region agent log
-            f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "bot.py:369", "message": "handle_channel_message: no message", "data": {}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
-            # #endregion
             return
         
         # Process channel message
-        result = await self.channel_reader.process_channel_message(message)
-        
-        # #region agent log
-        f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "bot.py:377", "message": "handle_channel_message: process result", "data": {"result": result, "message_id": message.message_id, "chat_id": message.chat.id}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
-        # #endregion
+        await self.channel_reader.process_channel_message(message)
     
     def _parse_period(self, period_input: str):
         """Parse period string into start and end dates."""
@@ -621,6 +607,24 @@ class NewsBot:
         elif data.startswith("change_source_menu:"):
             channel_id = int(data.split(":")[1])
             await self._show_change_source_menu(query, channel_id)
+        elif data == "default_sources_menu":
+            await self._show_categories_menu(query)
+        elif data.startswith("category:"):
+            category_id = data.split(":")[1]
+            await self._show_category_sources(query, category_id)
+        elif data.startswith("add_default_source:"):
+            parts = data.split(":", 2)  # Split only first 2 colons to handle URLs
+            category_id = parts[1] if len(parts) > 1 else ""
+            username = parts[2] if len(parts) > 2 else ""
+            await self._handle_add_default_source(query, category_id, username)
+        elif data == "add_manual_source":
+            await self._handle_add_manual_source(query)
+        elif data == "show_news_period":
+            message = "📰 Получить новости\n\nВыберите период:"
+            keyboard = self._create_period_keyboard()
+            await query.edit_message_text(message, reply_markup=keyboard)
+        else:
+            logger.warning(f"Unhandled callback data: {data}")
     
     async def _show_channels_list_callback(self, query):
         """Show channels list from callback."""
@@ -885,8 +889,20 @@ class NewsBot:
         elif text == "⚙️ Настройки":
             await self._show_settings_menu(update)
         else:
-            # Try to search/add channel manually
-            await self._try_add_channel(update, text)
+            # Only try to add channel if text looks like a channel identifier
+            # Check if it's a valid channel format (not a button label)
+            channel_input = text.strip()
+            if (channel_input.startswith("@") or 
+                channel_input.startswith("https://t.me/") or 
+                channel_input.startswith("http://") or
+                channel_input.startswith("https://")):
+                await self._try_add_channel(update, text)
+            else:
+                # Probably not a channel - show help
+                await update.message.reply_text(
+                    "Введите username канала (например: @channel_name) или RSS ссылку.\n\n"
+                    "Или используйте кнопки меню для навигации."
+                )
     
     async def _show_tags_list_text(self, update: Update):
         """Show tags list from text command."""
@@ -921,13 +937,38 @@ class NewsBot:
     
     async def _try_add_channel(self, update: Update, text: str):
         """Try to add channel from text input."""
-        # Similar to add_channel_command but from text
+        # Skip if text looks like a button label (contains emoji and is not a valid channel format)
         channel_input = text.strip()
+        
+        # Don't try to parse button labels or non-channel text
+        # Valid channel formats: @channel, https://t.me/channel, or plain channel name without spaces/emojis
+        if not (channel_input.startswith("@") or 
+                channel_input.startswith("https://t.me/") or 
+                channel_input.startswith("http://") or
+                channel_input.startswith("https://") or
+                (len(channel_input) > 0 and " " not in channel_input and not any(ord(c) > 127 for c in channel_input if c not in "._-"))):
+            # Probably not a channel - ignore silently or show help
+            await update.message.reply_text(
+                "Введите username канала (например: @channel_name) или RSS ссылку.\n\n"
+                "Или используйте кнопки меню для навигации."
+            )
+            return
         
         # Try to extract channel username or ID
         username = None
         if channel_input.startswith("https://t.me/"):
             username = channel_input.replace("https://t.me/", "").lstrip("/")
+        elif channel_input.startswith("http://") or channel_input.startswith("https://"):
+            # RSS URL or web URL - handle as RSS source
+            channel_id = hash(channel_input) % (10 ** 9)
+            title = channel_input.split("/")[-1] or "RSS Feed"
+            success = self.db.add_channel(channel_id, channel_input, title, source_type='rss')
+            if success:
+                self.db.update_channel_source_type(channel_id, 'rss', {'rss_url': channel_input})
+                await update.message.reply_text(f"✅ RSS источник добавлен: {title}")
+            else:
+                await update.message.reply_text("⚠️ Источник уже был добавлен ранее.")
+            return
         elif channel_input.startswith("@"):
             username = channel_input.lstrip("@")
         else:
@@ -955,6 +996,14 @@ class NewsBot:
                         channel_id = hash(username) % (10 ** 9)
             except Exception as parser_error:
                 logger.warning(f"Parsers also failed: {parser_error}")
+                await update.message.reply_text(
+                    f"Не удалось найти канал '{channel_input}'.\n\n"
+                    "Проверьте:\n"
+                    "• Правильность написания username\n"
+                    "• Что канал существует и публичный\n"
+                    "• Или используйте полную ссылку: https://t.me/channel_name"
+                )
+                return
         
         if not channel_id:
             await update.message.reply_text(
@@ -1191,17 +1240,45 @@ class NewsBot:
         sources = category_data.get("sources", [])
         
         message = f"{category_name}\n\nДоступные источники:\n\n"
-        existing_channels = {ch.get('username'): True for ch in self.db.get_all_channels()}
+        
+        # Build a set of existing channel IDs for fast lookup
+        all_channels = self.db.get_all_channels()
+        existing_channel_ids = {ch.get('channel_id') for ch in all_channels}
         
         for source in sources:
             title = source.get("title", "Unknown")
             username = source.get("username", "")
-            is_added = username in existing_channels
+            source_type = source.get("source_type", "rss")
+            source_config = source.get("source_config", {})
+            
+            # Check if source is already added by computing channel_id the same way we do when adding
+            is_added = False
+            if source_type == "rss" and source_config.get("rss_url"):
+                # For RSS, channel_id is hash of rss_url
+                rss_url = source_config.get("rss_url")
+                channel_id = hash(rss_url) % (10 ** 9)
+                is_added = channel_id in existing_channel_ids
+            else:
+                # For other sources, channel_id is hash of username
+                channel_id = hash(username) % (10 ** 9)
+                is_added = channel_id in existing_channel_ids
+            
             status = "✅ Добавлен" if is_added else "➕ Добавить"
             message += f"• {title} - {status}\n"
         
         keyboard = self._create_category_sources_keyboard(category_id)
-        await query.edit_message_text(message, reply_markup=keyboard)
+        try:
+            await query.edit_message_text(message, reply_markup=keyboard)
+        except Exception as e:
+            # If message is not modified (same content), that's fine - just answer the callback
+            error_msg = str(e).lower()
+            if "not modified" in error_msg or "message is not modified" in error_msg:
+                # Message content is the same - this is OK, just acknowledge
+                await query.answer()
+            else:
+                # Re-raise other exceptions
+                logger.error(f"Error updating category sources message: {e}")
+                raise
     
     async def _handle_add_default_source(self, query, category_id: str, username: str):
         """Handle adding a default source."""
@@ -1298,9 +1375,6 @@ class NewsBot:
         async def handle_channel_post_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """Handle channel_post updates explicitly."""
             if update.channel_post:
-                # #region agent log
-                import json; f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "bot.py:834", "message": "TypeHandler caught channel_post", "data": {"has_channel_post": update.channel_post is not None, "chat_id": update.channel_post.chat.id if update.channel_post and update.channel_post.chat else None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
-                # #endregion
                 await self.handle_channel_message(update, context)
         
         # Add TypeHandler to catch channel_post updates explicitly (group=-1 to run first)
