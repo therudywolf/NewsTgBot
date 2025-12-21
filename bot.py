@@ -360,12 +360,26 @@ class NewsBot:
             await processing_msg.edit_text(f"❌ Ошибка при обработке новостей: {e}")
     
     async def handle_channel_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle messages from channels."""
-        if not update.message:
+        """Handle messages from channels (both message and channel_post)."""
+        # Handle channel_post (messages from channels) or message (for supergroups)
+        message = update.channel_post or update.message
+        
+        # #region agent log
+        import json; f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "bot.py:362", "message": "handle_channel_message entry", "data": {"has_message": update.message is not None, "has_channel_post": update.channel_post is not None, "has_processed_message": message is not None, "chat_id": message.chat.id if message and message.chat else None, "chat_type": str(message.chat.type) if message and message.chat else None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+        # #endregion
+        
+        if not message:
+            # #region agent log
+            f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "bot.py:369", "message": "handle_channel_message: no message", "data": {}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+            # #endregion
             return
         
         # Process channel message
-        await self.channel_reader.process_channel_message(update.message)
+        result = await self.channel_reader.process_channel_message(message)
+        
+        # #region agent log
+        f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "C", "location": "bot.py:377", "message": "handle_channel_message: process result", "data": {"result": result, "message_id": message.message_id, "chat_id": message.chat.id}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+        # #endregion
     
     def _parse_period(self, period_input: str):
         """Parse period string into start and end dates."""
@@ -435,6 +449,9 @@ class NewsBot:
         
         data = query.data
         
+        # Store context.bot for handlers
+        self._current_context_bot = context.bot
+        
         if data == "main_menu":
             await query.message.reply_text(
                 "Главное меню",
@@ -448,9 +465,9 @@ class NewsBot:
             await self._show_channel_info(query, channel_id)
         elif data.startswith("parse_channel:"):
             channel_id = int(data.split(":")[1])
-            await self._handle_parse_channel(query, channel_id)
+            await self._handle_parse_channel(query, channel_id, context)
         elif data == "parse_all":
-            await self._handle_parse_all(query)
+            await self._handle_parse_all(query, context)
         elif data.startswith("channel_stats:"):
             channel_id = int(data.split(":")[1])
             await self._show_channel_stats(query, channel_id)
@@ -512,13 +529,27 @@ class NewsBot:
         keyboard = self._create_channel_actions_keyboard(channel_id)
         await query.edit_message_text(message, reply_markup=keyboard)
     
-    async def _handle_parse_channel(self, query, channel_id: int):
+    async def _handle_parse_channel(self, query, channel_id: int, context: ContextTypes.DEFAULT_TYPE = None):
         """Handle parse channel request."""
         await query.edit_message_text("⏳ Парсинг канала...")
         
+        # #region agent log
+        import json; f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "bot.py:526", "message": "_handle_parse_channel entry", "data": {"channel_id": channel_id, "has_query_message": query.message is not None, "has_context": context is not None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+        # #endregion
+        
         try:
+            # Get bot from context (stored in button_handler) or use app.bot
+            bot = getattr(self, '_current_context_bot', None) or (context.bot if context else None) or self.app.bot
+            
+            # #region agent log
+            f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "A", "location": "bot.py:535", "message": "bot object check", "data": {"bot_type": str(type(bot)) if bot else "None", "has_bot": bot is not None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+            # #endregion
+            
+            if not bot:
+                raise AttributeError("Cannot get bot instance")
+            
             stats = await self.channel_reader.force_parse_channel(
-                query.message.bot, channel_id, limit=1000, days=30
+                bot, channel_id, limit=1000, days=30
             )
             
             message = f"✅ Парсинг завершен!\n\n"
@@ -535,7 +566,7 @@ class NewsBot:
             logger.error(f"Error parsing channel {channel_id}: {e}", exc_info=True)
             await query.edit_message_text(f"❌ Ошибка при парсинге: {e}")
     
-    async def _handle_parse_all(self, query):
+    async def _handle_parse_all(self, query, context: ContextTypes.DEFAULT_TYPE = None):
         """Handle parse all channels request."""
         channels = self.db.get_all_channels()
         if not channels:
@@ -544,12 +575,18 @@ class NewsBot:
         
         await query.edit_message_text(f"⏳ Парсинг {len(channels)} каналов...")
         
+        # Get bot from context or app
+        bot = getattr(self, '_current_context_bot', None) or (context.bot if context else None) or self.app.bot
+        if not bot:
+            await query.edit_message_text("❌ Ошибка: не удалось получить bot instance")
+            return
+        
         total_parsed = 0
         for channel in channels:
             try:
                 channel_id = channel.get('channel_id')
                 stats = await self.channel_reader.force_parse_channel(
-                    query.message.bot, channel_id, limit=500, days=7
+                    bot, channel_id, limit=500, days=7
                 )
                 total_parsed += stats['parsed']
             except Exception as e:
@@ -787,6 +824,7 @@ class NewsBot:
         )
         
         # Handle channel messages (messages from channels/groups)
+        # Note: Channel posts come as channel_post, not message
         self.app.add_handler(
             MessageHandler(
                 filters.ChatType.CHANNEL | filters.ChatType.SUPERGROUP,

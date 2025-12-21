@@ -22,18 +22,37 @@ class ChannelReader:
         message: Message
     ) -> bool:
         """Process a single message from a channel."""
+        # #region agent log
+        import json; f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "D", "location": "channel_reader.py:20", "message": "process_channel_message entry", "data": {"message_id": message.message_id if message else None, "has_chat": message.chat is not None if message else False, "chat_type": str(message.chat.type) if message and message.chat else None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+        # #endregion
+        
         try:
             # Check if message is from a channel
             if not message.chat or message.chat.type not in [ChatType.CHANNEL, ChatType.SUPERGROUP]:
+                # #region agent log
+                f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "D", "location": "channel_reader.py:30", "message": "process_channel_message: not channel/supergroup", "data": {"chat_type": str(message.chat.type) if message and message.chat else None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+                # #endregion
                 return False
             
             # Get channel ID
             channel_id = message.chat.id
             
+            # #region agent log
+            f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "D", "location": "channel_reader.py:34", "message": "process_channel_message: checking channel", "data": {"channel_id": channel_id}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+            # #endregion
+            
             # Check if this channel is in our database
             channel_info = self.db.get_channel_by_id(channel_id)
+            
+            # #region agent log
+            f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "D", "location": "channel_reader.py:40", "message": "process_channel_message: channel_info check", "data": {"channel_id": channel_id, "channel_info_found": channel_info is not None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+            # #endregion
+            
             if not channel_info:
                 # Channel not tracked, skip
+                # #region agent log
+                f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "D", "location": "channel_reader.py:44", "message": "process_channel_message: channel not tracked", "data": {"channel_id": channel_id}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+                # #endregion
                 return False
             
             # Get message text
@@ -49,6 +68,11 @@ class ChannelReader:
             
             news_id = self.db.add_news(channel_id, message_id, text, date_str)
             # Note: Tag generation can be done asynchronously in background task
+            
+            # #region agent log
+            f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "D", "location": "channel_reader.py:54", "message": "process_channel_message: news added", "data": {"channel_id": channel_id, "message_id": message_id, "news_id": news_id, "text_length": len(text)}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+            # #endregion
+            
             return news_id is not None
             
         except Exception as e:
@@ -72,6 +96,10 @@ class ChannelReader:
         Returns:
             Dict with stats: {'parsed': int, 'skipped': int, 'errors': int}
         """
+        # #region agent log
+        import json; f = open('c:\\Users\\rudywolf\\Workspace\\NewsTgBot\\.cursor\\debug.log', 'a', encoding='utf-8'); f.write(json.dumps({"sessionId": "debug-session", "runId": "run1", "hypothesisId": "B", "location": "channel_reader.py:62", "message": "force_parse_channel entry", "data": {"channel_id": channel_id, "bot_type": str(type(bot)), "has_bot": bot is not None}, "timestamp": int(__import__('time').time() * 1000)}) + '\n'); f.close()
+        # #endregion
+        
         stats = {'parsed': 0, 'skipped': 0, 'errors': 0}
         
         try:
