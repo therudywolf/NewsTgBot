@@ -1,8 +1,11 @@
 """LLM client for deduplication and aggregation."""
 import aiohttp
 import json
+import logging
 from typing import List, Dict, Any, Optional
 import config
+
+logger = logging.getLogger(__name__)
 
 
 class LLMClient:
@@ -59,13 +62,13 @@ class LLMClient:
                             return str(data)
                     else:
                         error_text = await response.text()
-                        print(f"LLM API error {response.status}: {error_text}")
+                        logger.error(f"LLM API error {response.status}: {error_text}")
                         return None
         except aiohttp.ClientError as e:
-            print(f"LLM API request error: {e}")
+            logger.error(f"LLM API request error: {e}")
             return None
         except Exception as e:
-            print(f"Unexpected error in LLM request: {e}")
+            logger.error(f"Unexpected error in LLM request: {e}")
             return None
     
     async def deduplicate_news(self, news_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -117,8 +120,8 @@ class LLMClient:
                 unique_indices = [i - 1 for i in indices if 1 <= i <= len(news_items)]
                 return [news_items[i] for i in unique_indices if 0 <= i < len(news_items)]
         except (json.JSONDecodeError, ValueError, IndexError) as e:
-            print(f"Error parsing deduplication response: {e}")
-            print(f"Response was: {response}")
+            logger.warning(f"Error parsing deduplication response: {e}")
+            logger.debug(f"Response was: {response}")
             # If parsing fails, return all items
             return news_items
         

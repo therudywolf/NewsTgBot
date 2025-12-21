@@ -1,6 +1,7 @@
 """Main bot file for Telegram News Aggregator."""
 import asyncio
 import json
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import List
@@ -12,6 +13,8 @@ import channel_reader
 import deduplicator
 import llm_client
 import scheduler
+
+logger = logging.getLogger(__name__)
 
 
 class NewsBot:
@@ -121,10 +124,12 @@ class NewsBot:
         self._add_channel_to_json(channel_id, username, title)
         
         if success:
+            logger.info(f"Channel added: {title} (@{username}, ID: {channel_id})")
             await update.message.reply_text(
                 f"✅ Канал {title} (@{username}) успешно добавлен!"
             )
         else:
+            logger.warning(f"Channel already exists: {title} (@{username}, ID: {channel_id})")
             await update.message.reply_text(
                 f"⚠️ Канал уже был добавлен ранее."
             )
@@ -172,8 +177,10 @@ class NewsBot:
         self._remove_channel_from_json(channel_id)
         
         if success:
+            logger.info(f"Channel removed: ID {channel_id}")
             await update.message.reply_text("✅ Канал успешно удален!")
         else:
+            logger.warning(f"Channel not found for removal: ID {channel_id}")
             await update.message.reply_text("⚠️ Канал не найден в списке.")
     
     async def list_channels_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,13 +237,16 @@ class NewsBot:
                 return
             
             # Deduplicate using LLM
+            logger.info(f"Processing {len(news_items)} news items for period {start_date.date()} - {end_date.date()}")
             await processing_msg.edit_text(f"🔍 Найдено {len(news_items)} новостей. Удаляю дубликаты...")
             unique_news = await self.deduplicator.deduplicate(news_items)
             
             if not unique_news:
+                logger.warning("No unique news after deduplication")
                 await processing_msg.edit_text("После удаления дубликатов новостей не осталось.")
                 return
             
+            logger.info(f"After deduplication: {len(unique_news)} unique news items")
             # Aggregate using LLM
             await processing_msg.edit_text(
                 f"📝 Уникальных новостей: {len(unique_news)}. Создаю сводку..."
@@ -265,8 +275,8 @@ class NewsBot:
                 await processing_msg.edit_text(summary)
                 
         except Exception as e:
+            logger.error(f"Error in get_news_command: {e}", exc_info=True)
             await processing_msg.edit_text(f"❌ Ошибка при обработке новостей: {e}")
-            print(f"Error in get_news_command: {e}")
     
     async def handle_channel_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle messages from channels."""
@@ -367,7 +377,7 @@ class NewsBot:
         # self.scheduler.start(self.periodic_check)
         
         # Run bot
-        print("Bot is starting...")
+        logger.info("Bot is starting...")
         self.app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

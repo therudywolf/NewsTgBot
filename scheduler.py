@@ -1,7 +1,10 @@
 """Scheduler for periodic channel checking."""
 import asyncio
+import logging
 from typing import Callable
 import config
+
+logger = logging.getLogger(__name__)
 
 
 class Scheduler:
@@ -19,7 +22,7 @@ class Scheduler:
             try:
                 await coro()
             except Exception as e:
-                print(f"Error in scheduled task: {e}")
+                logger.error(f"Error in scheduled task: {e}", exc_info=True)
             await asyncio.sleep(self.interval_seconds)
     
     def start(self, coro: Callable):

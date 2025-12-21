@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: news-tg-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Персистентное хранение БД и данных
+      - ./data:/app/data
+    environment:
+      - DATABASE_PATH=/app/data/news_bot.db
+      - CHANNELS_JSON_PATH=/app/data/channels.json
+    # Healthcheck (опционально)
+    # healthcheck:
+    #   test: ["CMD", "python", "-c", "import sqlite3; conn = sqlite3.connect('/app/news_bot.db'); conn.close()"]
+    #   interval: 30s
+    #   timeout: 10s
+    #   retries: 3
+    #   start_period: 40s
+

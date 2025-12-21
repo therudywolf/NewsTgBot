@@ -1,10 +1,13 @@
 """Channel reader for fetching messages from Telegram channels."""
+import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from telegram import Update, Message
 from telegram.constants import ChatType
 from telegram.ext import ContextTypes
 import database
+
+logger = logging.getLogger(__name__)
 
 
 class ChannelReader:
@@ -47,7 +50,7 @@ class ChannelReader:
             return self.db.add_news(channel_id, message_id, text, date_str)
             
         except Exception as e:
-            print(f"Error processing message {message.message_id if message else 'unknown'} from channel: {e}")
+            logger.error(f"Error processing message {message.message_id if message else 'unknown'} from channel: {e}")
             return False
     
     def is_tracked_channel(self, channel_id: int) -> bool:

@@ -1,9 +1,12 @@
 """Database module for storing channels, news, and sessions."""
 import sqlite3
 import json
+import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 import config
+
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -88,7 +91,7 @@ class Database:
             conn.commit()
             return cursor.rowcount > 0
         except sqlite3.Error as e:
-            print(f"Error adding channel: {e}")
+            logger.error(f"Error adding channel: {e}")
             return False
         finally:
             conn.close()
@@ -105,7 +108,7 @@ class Database:
             conn.commit()
             return cursor.rowcount > 0
         except sqlite3.Error as e:
-            print(f"Error removing channel: {e}")
+            logger.error(f"Error removing channel: {e}")
             return False
         finally:
             conn.close()
@@ -148,7 +151,7 @@ class Database:
             conn.commit()
             return cursor.rowcount > 0
         except sqlite3.Error as e:
-            print(f"Error adding news: {e}")
+            logger.error(f"Error adding news: {e}")
             return False
         finally:
             conn.close()

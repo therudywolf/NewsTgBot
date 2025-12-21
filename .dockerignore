@@ -1,6 +1,3 @@
-# Environment variables
-.env
-
 # Python
 __pycache__/
 *.py[cod]
@@ -34,15 +31,31 @@ ENV/
 *.swp
 *.swo
 
-# Database
+# Environment variables
+.env
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Documentation
+README.md
+*.md
+
+# Database (будет в volume)
 *.db
 *.sqlite
 *.sqlite3
 
-# Docker data directories
-data/
-logs/
-
 # Logs
 *.log
+
+# OS
+.DS_Store
+Thumbs.db
 
