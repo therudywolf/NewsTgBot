@@ -158,4 +158,49 @@ class LLMClient:
             return "Ошибка при генерации сводки новостей. Попробуйте позже."
         
         return response.strip()
+    
+    async def generate_tags(self, news_text: str) -> List[str]:
+        """Use LLM to generate tags for a news item."""
+        if not news_text or not news_text.strip():
+            return []
+        
+        system_prompt = """Ты помощник для генерации тегов новостей.
+Твоя задача - проанализировать текст новости и создать 3-5 релевантных тегов.
+
+Важно: верни ТОЛЬКО теги в формате JSON массива строк, например: ["тег1", "тег2", "тег3"]
+Теги должны быть короткими (1-3 слова), на русском языке, без специальных символов.
+Не включай в ответ никаких дополнительных объяснений или текста, только JSON массив."""
+        
+        user_prompt = f"""Проанализируй следующую новость и создай 3-5 релевантных тегов:
+
+{news_text}
+
+Верни JSON массив с тегами."""
+        
+        response = await self._make_request(user_prompt, system_prompt)
+        
+        if not response:
+            return []
+        
+        # Try to parse the response as JSON
+        try:
+            # Clean the response - remove markdown code blocks if present
+            response = response.strip()
+            if response.startswith("```"):
+                lines = response.split('\n')
+                response = '\n'.join(lines[1:-1]) if len(lines) > 2 else response
+            if response.startswith("```json"):
+                lines = response.split('\n')
+                response = '\n'.join(lines[1:-1]) if len(lines) > 2 else response
+            
+            tags = json.loads(response)
+            if isinstance(tags, list) and all(isinstance(tag, str) for tag in tags):
+                # Normalize tags: lowercase, strip, filter empty
+                normalized_tags = [tag.lower().strip() for tag in tags if tag.strip()]
+                return normalized_tags[:5]  # Limit to 5 tags
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Error parsing tags response: {e}")
+            logger.debug(f"Response was: {response}")
+        
+        return []
 

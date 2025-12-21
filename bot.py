@@ -4,9 +4,9 @@ import json
 import logging
 import re
 from datetime import datetime, timedelta
-from typing import List
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from typing import List, Dict
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 import config
 import database
 import channel_reader
@@ -31,23 +31,100 @@ class NewsBot:
     
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /start command."""
-        welcome_message = """
-Привет! Я бот для агрегации новостей из Telegram каналов.
+        welcome_message = """Привет! Я бот для агрегации новостей из Telegram каналов.
 
-Команды:
-/start - показать это сообщение
-/add_channel <ссылка> - добавить канал для отслеживания
-/remove_channel <ссылка или ID> - удалить канал
-/list_channels - показать список каналов
-/get_news <период> - получить агрегированные новости
-/help - подробная справка
-
-Примеры периодов для /get_news:
-• /get_news 1d - за последний день
-• /get_news 7d - за последнюю неделю
-• /get_news 2024-01-01:2024-01-07 - за указанный период
-"""
-        await update.message.reply_text(welcome_message)
+Используй кнопки ниже для навигации или команды для быстрого доступа."""
+        
+        keyboard = self._create_main_keyboard()
+        await update.message.reply_text(
+            welcome_message,
+            reply_markup=keyboard
+        )
+    
+    def _create_main_keyboard(self) -> ReplyKeyboardMarkup:
+        """Create main reply keyboard."""
+        keyboard = [
+            ["📋 Каналы", "🔍 Поиск каналов"],
+            ["📰 Новости", "🏷️ Теги"],
+            ["⚙️ Настройки", "📊 Статистика"]
+        ]
+        return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
+    def _create_channels_inline_keyboard(self, channels: List[Dict]) -> InlineKeyboardMarkup:
+        """Create inline keyboard for channels list."""
+        buttons = []
+        for channel in channels:
+            channel_id = channel.get('channel_id')
+            title = channel.get('title', 'N/A')[:30]  # Limit title length
+            buttons.append([
+                InlineKeyboardButton(
+                    f"📺 {title}",
+                    callback_data=f"channel_info:{channel_id}"
+                )
+            ])
+        
+        # Add action buttons
+        buttons.append([
+            InlineKeyboardButton("🔄 Парсить все", callback_data="parse_all"),
+            InlineKeyboardButton("📊 Статистика", callback_data="global_stats")
+        ])
+        
+        return InlineKeyboardMarkup(buttons)
+    
+    def _create_channel_actions_keyboard(self, channel_id: int) -> InlineKeyboardMarkup:
+        """Create inline keyboard for channel actions."""
+        buttons = [
+            [
+                InlineKeyboardButton("🔄 Парсить", callback_data=f"parse_channel:{channel_id}"),
+                InlineKeyboardButton("📊 Статистика", callback_data=f"channel_stats:{channel_id}")
+            ],
+            [
+                InlineKeyboardButton("❌ Удалить", callback_data=f"confirm_remove:{channel_id}"),
+                InlineKeyboardButton("🔙 Назад", callback_data="list_channels")
+            ]
+        ]
+        return InlineKeyboardMarkup(buttons)
+    
+    def _create_period_keyboard(self) -> InlineKeyboardMarkup:
+        """Create inline keyboard for period selection."""
+        buttons = [
+            [
+                InlineKeyboardButton("1 день", callback_data="period:1d"),
+                InlineKeyboardButton("7 дней", callback_data="period:7d"),
+                InlineKeyboardButton("30 дней", callback_data="period:30d")
+            ],
+            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+        ]
+        return InlineKeyboardMarkup(buttons)
+    
+    def _create_tags_keyboard(self, tags: List[Dict], page: int = 0, per_page: int = 10) -> InlineKeyboardMarkup:
+        """Create inline keyboard for tags."""
+        buttons = []
+        start_idx = page * per_page
+        end_idx = start_idx + per_page
+        
+        for tag in tags[start_idx:end_idx]:
+            tag_id = tag.get('id')
+            tag_name = tag.get('name', 'N/A')
+            usage = tag.get('usage_count', 0)
+            buttons.append([
+                InlineKeyboardButton(
+                    f"#{tag_name} ({usage})",
+                    callback_data=f"tag:{tag_id}"
+                )
+            ])
+        
+        # Pagination buttons
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"tags_page:{page-1}"))
+        if end_idx < len(tags):
+            nav_buttons.append(InlineKeyboardButton("Вперед ▶️", callback_data=f"tags_page:{page+1}"))
+        if nav_buttons:
+            buttons.append(nav_buttons)
+        
+        buttons.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
+        return InlineKeyboardMarkup(buttons)
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command."""
@@ -185,6 +262,10 @@ class NewsBot:
     
     async def list_channels_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /list_channels command."""
+        await self._show_channels_list(update)
+    
+    async def _show_channels_list(self, update: Update):
+        """Show channels list with inline keyboard."""
         channels = self.db.get_all_channels()
         
         if not channels:
@@ -195,10 +276,10 @@ class NewsBot:
         for idx, channel in enumerate(channels, 1):
             username = channel.get('username', 'N/A')
             title = channel.get('title', 'N/A')
-            channel_id = channel.get('channel_id', 'N/A')
-            message += f"{idx}. {title} (@{username})\n   ID: {channel_id}\n\n"
+            message += f"{idx}. {title} (@{username})\n"
         
-        await update.message.reply_text(message)
+        keyboard = self._create_channels_inline_keyboard(channels)
+        await update.message.reply_text(message, reply_markup=keyboard)
     
     async def get_news_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /get_news command."""
@@ -346,6 +427,338 @@ class NewsBot:
         with open(config.CHANNELS_JSON_PATH, 'w', encoding='utf-8') as f:
             json.dump(channels, f, ensure_ascii=False, indent=2)
     
+    # Button handlers
+    async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle inline button callbacks."""
+        query = update.callback_query
+        await query.answer()
+        
+        data = query.data
+        
+        if data == "main_menu":
+            await query.message.reply_text(
+                "Главное меню",
+                reply_markup=self._create_main_keyboard()
+            )
+            await query.message.delete()
+        elif data == "list_channels":
+            await self._show_channels_list_callback(query)
+        elif data.startswith("channel_info:"):
+            channel_id = int(data.split(":")[1])
+            await self._show_channel_info(query, channel_id)
+        elif data.startswith("parse_channel:"):
+            channel_id = int(data.split(":")[1])
+            await self._handle_parse_channel(query, channel_id)
+        elif data == "parse_all":
+            await self._handle_parse_all(query)
+        elif data.startswith("channel_stats:"):
+            channel_id = int(data.split(":")[1])
+            await self._show_channel_stats(query, channel_id)
+        elif data == "global_stats":
+            await self._show_global_stats(query)
+        elif data.startswith("period:"):
+            period = data.split(":")[1]
+            await self._handle_get_news_period(query, period)
+        elif data.startswith("tag:"):
+            tag_id = int(data.split(":")[1])
+            await self._handle_tag_news(query, tag_id)
+        elif data.startswith("tags_page:"):
+            page = int(data.split(":")[1])
+            await self._show_tags_list(query, page)
+        elif data.startswith("confirm_remove:"):
+            channel_id = int(data.split(":")[1])
+            await self._confirm_remove_channel(query, channel_id)
+        elif data.startswith("remove_channel:"):
+            channel_id = int(data.split(":")[1])
+            await self._handle_remove_channel(query, channel_id)
+    
+    async def _show_channels_list_callback(self, query):
+        """Show channels list from callback."""
+        channels = self.db.get_all_channels()
+        if not channels:
+            await query.edit_message_text("Список каналов пуст.")
+            return
+        
+        message = "📋 Отслеживаемые каналы:\n\n"
+        for idx, channel in enumerate(channels, 1):
+            username = channel.get('username', 'N/A')
+            title = channel.get('title', 'N/A')
+            message += f"{idx}. {title} (@{username})\n"
+        
+        keyboard = self._create_channels_inline_keyboard(channels)
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _show_channel_info(self, query, channel_id: int):
+        """Show channel info with actions."""
+        channel = self.db.get_channel_by_id(channel_id)
+        if not channel:
+            await query.answer("Канал не найден", show_alert=True)
+            return
+        
+        message = f"📺 {channel.get('title', 'N/A')}\n"
+        message += f"@{channel.get('username', 'N/A')}\n"
+        message += f"ID: {channel_id}\n\n"
+        
+        stats = self.db.get_channel_stats(channel_id)
+        message += f"📊 Статистика:\n"
+        message += f"Всего новостей: {stats['total']}\n"
+        message += f"За день: {stats['day_count']}\n"
+        message += f"За неделю: {stats['week_count']}\n"
+        message += f"За месяц: {stats['month_count']}\n"
+        if stats['latest_date']:
+            latest = datetime.fromisoformat(stats['latest_date'])
+            message += f"Последняя новость: {latest.strftime('%Y-%m-%d %H:%M')}\n"
+        
+        keyboard = self._create_channel_actions_keyboard(channel_id)
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _handle_parse_channel(self, query, channel_id: int):
+        """Handle parse channel request."""
+        await query.edit_message_text("⏳ Парсинг канала...")
+        
+        try:
+            stats = await self.channel_reader.force_parse_channel(
+                query.message.bot, channel_id, limit=1000, days=30
+            )
+            
+            message = f"✅ Парсинг завершен!\n\n"
+            message += f"Распарсено: {stats['parsed']}\n"
+            message += f"Пропущено: {stats['skipped']}\n"
+            if stats['errors'] > 0:
+                message += f"Ошибок: {stats['errors']}\n"
+            
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 К каналу", callback_data=f"channel_info:{channel_id}")
+            ]])
+            await query.edit_message_text(message, reply_markup=keyboard)
+        except Exception as e:
+            logger.error(f"Error parsing channel {channel_id}: {e}", exc_info=True)
+            await query.edit_message_text(f"❌ Ошибка при парсинге: {e}")
+    
+    async def _handle_parse_all(self, query):
+        """Handle parse all channels request."""
+        channels = self.db.get_all_channels()
+        if not channels:
+            await query.answer("Нет каналов для парсинга", show_alert=True)
+            return
+        
+        await query.edit_message_text(f"⏳ Парсинг {len(channels)} каналов...")
+        
+        total_parsed = 0
+        for channel in channels:
+            try:
+                channel_id = channel.get('channel_id')
+                stats = await self.channel_reader.force_parse_channel(
+                    query.message.bot, channel_id, limit=500, days=7
+                )
+                total_parsed += stats['parsed']
+            except Exception as e:
+                logger.error(f"Error parsing channel {channel_id}: {e}")
+                continue
+        
+        message = f"✅ Парсинг всех каналов завершен!\n\n"
+        message += f"Всего распарсено: {total_parsed} новостей"
+        
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 К каналам", callback_data="list_channels")
+        ]])
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _show_channel_stats(self, query, channel_id: int):
+        """Show channel statistics."""
+        stats = self.db.get_channel_stats(channel_id)
+        channel = self.db.get_channel_by_id(channel_id)
+        
+        message = f"📊 Статистика канала {channel.get('title', 'N/A') if channel else channel_id}\n\n"
+        message += f"Всего новостей: {stats['total']}\n"
+        message += f"За последний день: {stats['day_count']}\n"
+        message += f"За последнюю неделю: {stats['week_count']}\n"
+        message += f"За последний месяц: {stats['month_count']}\n"
+        if stats['latest_date']:
+            latest = datetime.fromisoformat(stats['latest_date'])
+            message += f"\nПоследняя новость: {latest.strftime('%Y-%m-%d %H:%M')}"
+        
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 К каналу", callback_data=f"channel_info:{channel_id}")
+        ]])
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _show_global_stats(self, query):
+        """Show global statistics."""
+        stats = self.db.get_global_stats()
+        
+        message = "📊 Общая статистика\n\n"
+        message += f"Каналов: {stats['channels_count']}\n"
+        message += f"Новостей: {stats['news_count']}\n"
+        message += f"Тегов: {stats['tags_count']}\n"
+        if stats['latest_date']:
+            latest = datetime.fromisoformat(stats['latest_date'])
+            message += f"\nПоследняя новость: {latest.strftime('%Y-%m-%d %H:%M')}"
+        
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+        ]])
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    async def _handle_get_news_period(self, query, period: str):
+        """Handle get news by period from button."""
+        start_date, end_date = self._parse_period(period)
+        if not start_date or not end_date:
+            await query.answer("Неверный период", show_alert=True)
+            return
+        
+        await query.edit_message_text("⏳ Обрабатываю новости...")
+        
+        try:
+            news_items = self.db.get_news_by_period(
+                start_date.isoformat(),
+                end_date.isoformat()
+            )
+            
+            if not news_items:
+                await query.edit_message_text(f"Новостей за период не найдено.")
+                return
+            
+            await query.edit_message_text(f"🔍 Найдено {len(news_items)} новостей. Удаляю дубликаты...")
+            unique_news = await self.deduplicator.deduplicate(news_items)
+            
+            if not unique_news:
+                await query.edit_message_text("После удаления дубликатов новостей не осталось.")
+                return
+            
+            await query.edit_message_text(f"📝 Уникальных новостей: {len(unique_news)}. Создаю сводку...")
+            period_desc = f"{start_date.date()} - {end_date.date()}"
+            summary = await self.llm_client.aggregate_news(unique_news, period_desc)
+            
+            if len(summary) > 4096:
+                chunks = [summary[i:i+4090] for i in range(0, len(summary), 4090)]
+                await query.edit_message_text(chunks[0])
+                for chunk in chunks[1:]:
+                    await query.message.reply_text(chunk)
+            else:
+                await query.edit_message_text(summary)
+        except Exception as e:
+            logger.error(f"Error in _handle_get_news_period: {e}", exc_info=True)
+            await query.edit_message_text(f"❌ Ошибка: {e}")
+    
+    async def _handle_tag_news(self, query, tag_id: int):
+        """Handle get news by tag."""
+        news_items = self.db.get_news_by_tag(tag_id, limit=50)
+        
+        if not news_items:
+            await query.answer("Новостей с этим тегом не найдено", show_alert=True)
+            return
+        
+        await query.edit_message_text(f"📰 Найдено {len(news_items)} новостей. Обрабатываю...")
+        
+        # Deduplicate and aggregate
+        unique_news = await self.deduplicator.deduplicate(news_items)
+        if not unique_news:
+            await query.edit_message_text("После удаления дубликатов новостей не осталось.")
+            return
+        
+        summary = await self.llm_client.aggregate_news(unique_news, "по тегу")
+        await query.edit_message_text(summary)
+    
+    async def _show_tags_list(self, query, page: int = 0):
+        """Show tags list."""
+        tags = self.db.get_all_tags(limit=100)
+        
+        if not tags:
+            await query.edit_message_text("Тегов пока нет.")
+            return
+        
+        message = f"🏷️ Теги (страница {page + 1}):\n\n"
+        keyboard = self._create_tags_keyboard(tags, page)
+        await query.edit_message_text(message, reply_markup=keyboard)
+    
+    # Text message handlers for reply keyboard
+    async def handle_text_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle text messages (reply keyboard buttons)."""
+        text = update.message.text
+        
+        if text == "📋 Каналы":
+            await self._show_channels_list(update)
+        elif text == "🔍 Поиск каналов":
+            await update.message.reply_text(
+                "🔍 Поиск каналов\n\n"
+                "Введите username канала (например: @channel_name) или ссылку (https://t.me/channel_name) "
+                "для добавления канала в отслеживание.\n\n"
+                "Также можно использовать команду: /add_channel <ссылка>"
+            )
+        elif text == "📰 Новости":
+            keyboard = self._create_period_keyboard()
+            await update.message.reply_text("Выберите период для новостей:", reply_markup=keyboard)
+        elif text == "🏷️ Теги":
+            await self._show_tags_list_text(update)
+        elif text == "⚙️ Настройки":
+            await update.message.reply_text("Настройки пока не доступны.")
+        elif text == "📊 Статистика":
+            await self._show_global_stats_text(update)
+        else:
+            # Try to search/add channel
+            await self._try_add_channel(update, text)
+    
+    async def _show_tags_list_text(self, update: Update):
+        """Show tags list from text command."""
+        tags = self.db.get_all_tags(limit=100)
+        
+        if not tags:
+            await update.message.reply_text("Тегов пока нет.")
+            return
+        
+        message = "🏷️ Популярные теги:\n\n"
+        for tag in tags[:20]:  # Show top 20
+            name = tag.get('name', 'N/A')
+            usage = tag.get('usage_count', 0)
+            message += f"#{name} ({usage})\n"
+        
+        keyboard = self._create_tags_keyboard(tags, 0)
+        await update.message.reply_text(message, reply_markup=keyboard)
+    
+    async def _show_global_stats_text(self, update: Update):
+        """Show global stats from text command."""
+        stats = self.db.get_global_stats()
+        
+        message = "📊 Общая статистика\n\n"
+        message += f"Каналов: {stats['channels_count']}\n"
+        message += f"Новостей: {stats['news_count']}\n"
+        message += f"Тегов: {stats['tags_count']}\n"
+        if stats['latest_date']:
+            latest = datetime.fromisoformat(stats['latest_date'])
+            message += f"\nПоследняя новость: {latest.strftime('%Y-%m-%d %H:%M')}"
+        
+        await update.message.reply_text(message)
+    
+    async def _try_add_channel(self, update: Update, text: str):
+        """Try to add channel from text input."""
+        # Similar to add_channel_command but from text
+        channel_input = text.strip()
+        
+        # Try to extract channel username or ID
+        username = None
+        if channel_input.startswith("https://t.me/"):
+            username = channel_input.replace("https://t.me/", "").lstrip("/")
+        elif channel_input.startswith("@"):
+            username = channel_input.lstrip("@")
+        else:
+            username = channel_input
+        
+        try:
+            chat = await update.message.bot.get_chat(f"@{username}" if username else channel_input)
+            channel_id = chat.id
+            title = chat.title or username
+            
+            success = self.db.add_channel(channel_id, username, title)
+            self._add_channel_to_json(channel_id, username, title)
+            
+            if success:
+                await update.message.reply_text(f"✅ Канал {title} добавлен!")
+            else:
+                await update.message.reply_text("⚠️ Канал уже был добавлен ранее.")
+        except Exception as e:
+            await update.message.reply_text(f"Ошибка: {e}")
+    
     async def periodic_check(self):
         """Periodic check for new messages (placeholder - messages come via handlers)."""
         # In practice, messages are processed via handle_channel_message
@@ -364,6 +777,14 @@ class NewsBot:
         self.app.add_handler(CommandHandler("remove_channel", self.remove_channel_command))
         self.app.add_handler(CommandHandler("list_channels", self.list_channels_command))
         self.app.add_handler(CommandHandler("get_news", self.get_news_command))
+        
+        # Handle callback queries (inline buttons)
+        self.app.add_handler(CallbackQueryHandler(self.button_handler))
+        
+        # Handle text messages (reply keyboard buttons)
+        self.app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_text_message)
+        )
         
         # Handle channel messages (messages from channels/groups)
         self.app.add_handler(
