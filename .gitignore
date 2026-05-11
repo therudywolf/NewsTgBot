@@ -1,5 +1,16 @@
-# Environment variables
+# Environment and secrets
 .env
+.env.*
+!.env.example
+
+# Runtime data
+data/
+logs/
+*.db
+*.sqlite
+*.sqlite3
+*.session
+*.session-journal
 
 # Python
 __pycache__/
@@ -7,42 +18,30 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 build/
-develop-eggs/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
 
 # Virtual environments
+.venv/
 venv/
 env/
 ENV/
 
-# IDE
+# IDE and OS
+.cursor/
 .vscode/
 .idea/
 *.swp
 *.swo
+.DS_Store
+Thumbs.db
 
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
-# Docker data directories
-data/
-logs/
-
-# Logs
+# Local artifacts
 *.log
-
+coverage.xml

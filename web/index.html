@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NewsTgBot Admin</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>NewsTgBot</h1>
+        <p id="status-line">Загрузка статуса</p>
+      </div>
+      <div class="topbar-actions">
+        <button id="refresh-btn" type="button">Обновить</button>
+        <button id="parse-all-btn" type="button">Парсить все</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel span-2" aria-labelledby="status-title">
+        <div class="panel-head">
+          <h2 id="status-title">Состояние</h2>
+        </div>
+        <div class="metrics" id="metrics"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="bot-settings-title">
+        <div class="panel-head">
+          <h2 id="bot-settings-title">Настройки бота</h2>
+          <button id="bot-settings-refresh-btn" type="button">Обновить</button>
+        </div>
+        <div id="bot-settings-status" class="notice"></div>
+        <div class="form-grid">
+          <label>
+            Bot API Token
+            <input id="bot-token" type="password" autocomplete="off" placeholder="123456:ABC-DEF..." />
+          </label>
+          <label>
+            Telethon API ID
+            <input id="bot-telethon-api-id" autocomplete="off" placeholder="12345678" />
+          </label>
+          <label>
+            Telethon API Hash
+            <input id="bot-telethon-api-hash" type="password" autocomplete="off" placeholder="0123456789abcdef..." />
+          </label>
+          <label>
+            Telethon Phone
+            <input id="bot-telethon-phone" autocomplete="tel" placeholder="+79990000000" />
+          </label>
+          <label class="check-label">
+            <input id="bot-auto-parse" type="checkbox" />
+            Авто-парсинг
+          </label>
+          <label>
+            Интервал (сек)
+            <input id="bot-interval" type="number" min="60" step="60" placeholder="3600" />
+          </label>
+          <label>
+            Лимит сообщений
+            <input id="bot-parse-limit" type="number" min="1" placeholder="200" />
+          </label>
+          <label>
+            Глубина (дней)
+            <input id="bot-parse-days" type="number" min="1" placeholder="7" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="bot-settings-save-btn" type="button">Сохранить</button>
+          <button id="bot-env-export-btn" type="button">Экспорт .env</button>
+        </div>
+        <pre id="env-export-box" class="summary" style="display:none;font-size:12px;overflow-x:auto"></pre>
+      </section>
+
+      <section class="panel" aria-labelledby="lm-title">
+        <div class="panel-head">
+          <h2 id="lm-title">LM Studio</h2>
+          <button id="lm-test-btn" type="button">Проверить</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Base URL
+            <input id="lm-base-url" autocomplete="off" placeholder="http://localhost:1234" />
+          </label>
+          <label>
+            API mode
+            <select id="lm-api-mode">
+              <option value="native">native /api/v1</option>
+              <option value="openai">OpenAI-compatible /v1</option>
+            </select>
+          </label>
+          <label>
+            Selected model
+            <input id="lm-model" autocomplete="off" placeholder="model key" />
+          </label>
+          <label>
+            Load context
+            <input id="lm-load-context" type="number" min="1024" step="1024" placeholder="8192" />
+          </label>
+          <label class="check-label">
+            <input id="lm-flash-attention" type="checkbox" checked />
+            Flash attention
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="settings-save-btn" type="button">Сохранить</button>
+          <button id="models-load-btn" type="button">Получить модели</button>
+          <button id="selected-model-load-btn" type="button">Load selected</button>
+        </div>
+        <div id="lm-status" class="notice"></div>
+        <div id="models-list" class="list"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="telegram-title">
+        <div class="panel-head">
+          <h2 id="telegram-title">Telegram аккаунт</h2>
+          <button id="tg-status-btn" type="button">Статус</button>
+        </div>
+        <div id="tg-status" class="notice"></div>
+        <div class="form-grid">
+          <label>
+            Phone
+            <input id="tg-phone" autocomplete="tel" placeholder="+79990000000" />
+          </label>
+          <label>
+            Code
+            <input id="tg-code" autocomplete="one-time-code" placeholder="12345" />
+          </label>
+          <label>
+            2FA password
+            <input id="tg-password" type="password" autocomplete="current-password" />
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="tg-code-btn" type="button">Отправить код</button>
+          <button id="tg-login-btn" type="button">Войти</button>
+          <button id="tg-channels-btn" type="button">Список каналов</button>
+          <button id="tg-add-selected-btn" type="button">Добавить выбранные</button>
+        </div>
+        <div id="tg-channels" class="list compact"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="sources-title">
+        <div class="panel-head">
+          <h2 id="sources-title">Источники</h2>
+          <button id="sources-refresh-btn" type="button">Обновить</button>
+        </div>
+        <div class="form-grid">
+          <label>
+            Ручной источник
+            <input id="manual-source" placeholder="@channel или RSS URL" />
+          </label>
+          <label>
+            Название
+            <input id="manual-title" placeholder="опционально" />
+          </label>
+          <label>
+            Тип
+            <select id="manual-type">
+              <option value="rss">RSS</option>
+              <option value="telethon">Telegram account</option>
+              <option value="web">Telegram web</option>
+              <option value="telegram_bot">Telegram Bot API</option>
+            </select>
+          </label>
+        </div>
+        <div class="button-row">
+          <button id="manual-add-btn" type="button">Добавить</button>
+        </div>
+        <div id="sources-list" class="list"></div>
+      </section>
+
+      <section class="panel" aria-labelledby="defaults-title">
+        <div class="panel-head">
+          <h2 id="defaults-title">Открытые IT RSS</h2>
+          <button id="defaults-refresh-btn" type="button">Обновить</button>
+        </div>
+        <div id="default-sources" class="list compact"></div>
+      </section>
+
+      <section class="panel span-2" aria-labelledby="news-title">
+        <div class="panel-head">
+          <h2 id="news-title">Новости и сводка</h2>
+          <div class="inline-controls">
+            <input id="news-days" type="number" min="1" max="365" value="1" />
+            <button id="news-load-btn" type="button">Показать</button>
+            <button id="summary-btn" type="button">Сводка LLM</button>
+          </div>
+        </div>
+        <div id="summary-box" class="summary"></div>
+        <div id="news-list" class="news-list"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

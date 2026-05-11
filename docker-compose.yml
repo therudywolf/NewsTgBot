@@ -1,21 +1,35 @@
 services:
+  panel:
+    build: .
+    container_name: news-tg-bot-panel
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: ["uvicorn", "web_app:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
   bot:
     build: .
-    container_name: news-tg-bot
+    container_name: news-tg-bot-worker
     restart: unless-stopped
     env_file:
       - .env
     volumes:
-      # Персистентное хранение БД и данных
       - ./data:/app/data
-    environment:
-      - DATABASE_PATH=/app/data/news_bot.db
-      - CHANNELS_JSON_PATH=/app/data/channels.json
-    # Healthcheck (опционально)
-    # healthcheck:
-    #   test: ["CMD", "python", "-c", "import sqlite3; conn = sqlite3.connect('/app/news_bot.db'); conn.close()"]
-    #   interval: 30s
-    #   timeout: 10s
-    #   retries: 3
-    #   start_period: 40s
-
+      - ./logs:/app/logs
+    command:
+      [
+        "sh",
+        "-c",
+        "if [ -n \"$TELEGRAM_BOT_TOKEN\" ]; then python bot.py; else echo 'TELEGRAM_BOT_TOKEN is empty; bot service is waiting'; tail -f /dev/null; fi"
+      ]

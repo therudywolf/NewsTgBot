@@ -137,6 +137,14 @@ class Database:
                 UNIQUE(channel_id)
             )
         """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
         
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_sources_channel 
@@ -190,10 +198,12 @@ class Database:
         
         try:
             cursor.execute("DELETE FROM channels WHERE channel_id = ?", (channel_id,))
+            removed = cursor.rowcount > 0
+            cursor.execute("DELETE FROM sources WHERE channel_id = ?", (channel_id,))
             # Also delete associated news
             cursor.execute("DELETE FROM news WHERE channel_id = ?", (channel_id,))
             conn.commit()
-            return cursor.rowcount > 0
+            return removed
         except sqlite3.Error as e:
             logger.error(f"Error removing channel: {e}")
             return False
@@ -681,4 +691,63 @@ class Database:
             return {'source_type': row['source_type'], 'source_config': {}}
         
         return None
+
+    def set_setting(self, key: str, value: Any) -> bool:
+        """Persist an application setting as JSON."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        try:
+            now = datetime.now().isoformat()
+            cursor.execute(
+                """
+                INSERT INTO app_settings (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, json.dumps(value), now),
+            )
+            conn.commit()
+            return True
+        except sqlite3.Error as e:
+            logger.error(f"Error saving setting {key}: {e}")
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+    def get_setting(self, key: str, default: Any = None) -> Any:
+        """Read an application setting."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        conn.close()
+
+        if not row:
+            return default
+        try:
+            return json.loads(row["value"])
+        except (TypeError, json.JSONDecodeError):
+            return row["value"]
+
+    def get_settings(self) -> Dict[str, Any]:
+        """Read all application settings."""
+        conn = self._get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT key, value FROM app_settings ORDER BY key")
+        rows = cursor.fetchall()
+        conn.close()
+
+        settings: Dict[str, Any] = {}
+        for row in rows:
+            try:
+                settings[row["key"]] = json.loads(row["value"])
+            except (TypeError, json.JSONDecodeError):
+                settings[row["key"]] = row["value"]
+        return settings
 

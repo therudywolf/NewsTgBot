@@ -1,7 +1,7 @@
 """Telethon parser for parsing Telegram channels via MTProto Client API."""
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .base import BaseParser
 import config
@@ -27,28 +27,29 @@ class TelethonParser(BaseParser):
             from telethon import TelegramClient
             from telethon.errors import SessionPasswordNeededError
             
-            # Check if credentials are configured
-            if not config.TELETHON_API_ID or not config.TELETHON_API_HASH:
+            api_id = config.get_telethon_api_id()
+            api_hash = config.get_telethon_api_hash()
+            if not api_id or not api_hash:
                 logger.warning("Telethon API credentials not configured")
                 return None
             
-            # Create client
             self.client = TelegramClient(
                 config.TELETHON_SESSION_FILE,
-                int(config.TELETHON_API_ID),
-                config.TELETHON_API_HASH
+                int(api_id),
+                api_hash,
             )
             
             # Connect and authenticate if needed
             await self.client.connect()
             
             if not await self.client.is_user_authorized():
-                if not config.TELETHON_PHONE:
+                if not config.get_telethon_phone():
                     logger.warning("Telethon phone number not configured")
                     return None
                 
-                await self.client.send_code_request(config.TELETHON_PHONE)
-                logger.info(f"Telethon: Code sent to {config.TELETHON_PHONE}. "
+                phone = config.get_telethon_phone()
+                await self.client.send_code_request(phone)
+                logger.info(f"Telethon: Code sent to {phone}. "
                            "Please use client.sign_in() manually to complete authentication.")
                 return None
             
@@ -64,7 +65,7 @@ class TelethonParser(BaseParser):
     
     async def check_availability(self) -> bool:
         """Check if Telethon parser is available and configured."""
-        if not config.TELETHON_API_ID or not config.TELETHON_API_HASH:
+        if not config.get_telethon_api_id() or not config.get_telethon_api_hash():
             return False
         
         try:
@@ -93,7 +94,7 @@ class TelethonParser(BaseParser):
             if client is None:
                 return None
             
-            username = self._normalize_channel_username(channel_username)
+            username = self._entity_ref(channel_username)
             
             # Get entity (channel)
             entity = await client.get_entity(username)
@@ -140,7 +141,7 @@ class TelethonParser(BaseParser):
                 result['errors'] = 1
                 return result
             
-            username = self._normalize_channel_username(channel_username)
+            username = self._entity_ref(channel_username)
             
             # Get entity
             entity = await client.get_entity(username)
@@ -149,14 +150,17 @@ class TelethonParser(BaseParser):
             # Calculate offset date if days specified
             offset_date = None
             if days:
-                offset_date = datetime.now() - timedelta(days=days)
+                offset_date = datetime.now(timezone.utc) - timedelta(days=days)
             
             # Fetch messages
             messages_fetched = 0
             async for message in client.iter_messages(entity, limit=limit):
                 try:
                     # Skip if message is too old
-                    if offset_date and message.date < offset_date:
+                    message_date = message.date
+                    if message_date and message_date.tzinfo is None:
+                        message_date = message_date.replace(tzinfo=timezone.utc)
+                    if offset_date and message_date < offset_date:
                         break
                     
                     # Get message text
@@ -179,14 +183,14 @@ class TelethonParser(BaseParser):
                     
                     # Log progress every 100 messages
                     if messages_fetched % 100 == 0:
-                        logger.info(f"Telethon: Parsed {messages_fetched} messages from {username}")
+                        logger.info(f"Telethon: Parsed {messages_fetched} messages from {channel_username}")
                     
                 except Exception as e:
                     logger.error(f"Error processing message {message.id}: {e}")
                     result['errors'] += 1
                     continue
             
-            logger.info(f"Telethon: Completed parsing {username}. "
+            logger.info(f"Telethon: Completed parsing {channel_username}. "
                        f"Parsed: {result['parsed']}, Skipped: {result['skipped']}, Errors: {result['errors']}")
             
             return result
@@ -201,8 +205,15 @@ class TelethonParser(BaseParser):
         if self.client:
             try:
                 await self.client.disconnect()
-            except:
+            except Exception:
                 pass
             self.client = None
             self._initialized = False
+
+    def _entity_ref(self, channel_username: str):
+        """Return an entity reference accepted by Telethon."""
+        normalized = self._normalize_channel_username(str(channel_username))
+        if normalized.lstrip("-").isdigit():
+            return int(normalized)
+        return normalized
 

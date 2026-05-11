@@ -1,14 +1,14 @@
 {
   "categories": {
-    "it": {
-      "name": "💻 IT и технологии",
+    "it_global": {
+      "name": "IT: международные",
       "sources": [
         {
-          "title": "Habr",
-          "username": "habr",
+          "title": "Hacker News",
+          "username": "hacker-news",
           "source_type": "rss",
           "source_config": {
-            "rss_url": "https://habr.com/ru/rss/all/all/"
+            "rss_url": "https://news.ycombinator.com/rss"
           }
         },
         {
@@ -21,38 +21,94 @@
         },
         {
           "title": "Ars Technica",
-          "username": "arstechnica",
+          "username": "ars-technica",
           "source_type": "rss",
           "source_config": {
             "rss_url": "https://feeds.arstechnica.com/arstechnica/index"
           }
-        }
-      ]
-    },
-    "auto": {
-      "name": "🚗 Автомобили",
-      "sources": [
+        },
         {
-          "title": "Motor.ru",
-          "username": "motor_ru",
+          "title": "The Verge",
+          "username": "the-verge",
           "source_type": "rss",
           "source_config": {
-            "rss_url": "https://motor.ru/rss/all.xml"
+            "rss_url": "https://www.theverge.com/rss/index.xml"
           }
         },
         {
-          "title": "Autonews",
-          "username": "autonews",
+          "title": "The Register",
+          "username": "the-register",
           "source_type": "rss",
           "source_config": {
-            "rss_url": "https://www.autonews.ru/rss"
+            "rss_url": "https://www.theregister.com/headlines.atom"
+          }
+        },
+        {
+          "title": "InfoQ",
+          "username": "infoq",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://feed.infoq.com/"
+          }
+        }
+      ]
+    },
+    "it_ru": {
+      "name": "IT: русскоязычные",
+      "sources": [
+        {
+          "title": "Habr",
+          "username": "habr-all",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://habr.com/ru/rss/all/all/"
+          }
+        },
+        {
+          "title": "OpenNET",
+          "username": "opennet",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.opennet.ru/opennews/opennews_all.rss"
+          }
+        },
+        {
+          "title": "3DNews Software",
+          "username": "3dnews-software",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://3dnews.ru/software-news/rss/"
           }
         }
       ]
     },
     "security": {
-      "name": "🔒 Безопасность и хаккинг",
+      "name": "Безопасность",
       "sources": [
+        {
+          "title": "The Hacker News",
+          "username": "the-hacker-news",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://feeds.feedburner.com/TheHackersNews"
+          }
+        },
+        {
+          "title": "BleepingComputer",
+          "username": "bleepingcomputer",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.bleepingcomputer.com/feed/"
+          }
+        },
+        {
+          "title": "Krebs on Security",
+          "username": "krebs-on-security",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://krebsonsecurity.com/feed/"
+          }
+        },
         {
           "title": "SecurityLab",
           "username": "securitylab",
@@ -60,25 +116,98 @@
           "source_config": {
             "rss_url": "https://www.securitylab.ru/_services/export/rss/news/"
           }
-        },
+        }
+      ]
+    },
+    "engineering": {
+      "name": "Инженерные блоги",
+      "sources": [
         {
-          "title": "The Hacker News",
-          "username": "hackernews",
+          "title": "GitHub Blog",
+          "username": "github-blog",
           "source_type": "rss",
           "source_config": {
-            "rss_url": "https://feeds.feedburner.com/TheHackersNews"
+            "rss_url": "https://github.blog/feed/"
           }
         },
         {
-          "title": "Xakep",
-          "username": "xakep",
+          "title": "Stack Overflow Blog",
+          "username": "stackoverflow-blog",
           "source_type": "rss",
           "source_config": {
-            "rss_url": "https://xakep.ru/feed/"
+            "rss_url": "https://stackoverflow.blog/feed/"
+          }
+        },
+        {
+          "title": "Cloudflare Blog",
+          "username": "cloudflare-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://blog.cloudflare.com/rss/"
+          }
+        },
+        {
+          "title": "AWS News Blog",
+          "username": "aws-news-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://aws.amazon.com/blogs/aws/feed/"
+          }
+        },
+        {
+          "title": "Microsoft DevBlogs",
+          "username": "microsoft-devblogs",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://devblogs.microsoft.com/feed/"
+          }
+        },
+        {
+          "title": "Martin Fowler",
+          "username": "martin-fowler",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://martinfowler.com/feed.atom"
+          }
+        }
+      ]
+    },
+    "platforms": {
+      "name": "Платформы и языки",
+      "sources": [
+        {
+          "title": "Python Insider",
+          "username": "python-insider",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://blog.python.org/feeds/posts/default"
+          }
+        },
+        {
+          "title": "Node.js Blog",
+          "username": "nodejs-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://nodejs.org/en/feed/blog.xml"
+          }
+        },
+        {
+          "title": "Kubernetes Blog",
+          "username": "kubernetes-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://kubernetes.io/feed.xml"
+          }
+        },
+        {
+          "title": "Mozilla Hacks",
+          "username": "mozilla-hacks",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://hacks.mozilla.org/feed/"
           }
         }
       ]
     }
   }
 }
-

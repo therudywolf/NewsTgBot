@@ -1,83 +1,169 @@
 """Configuration module for News Telegram Bot."""
-import os
+import json
 import logging
+import os
 import sys
+from pathlib import Path
+
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Настройка логирования
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def setup_logging():
-    """Настроить логирование для приложения."""
-    log_format = '[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s'
-    date_format = '%Y-%m-%d %H:%M:%S'
-    
-    # Настройка root logger
+    """Configure process logging."""
+    log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+    date_format = "%Y-%m-%d %H:%M:%S"
+
     logging.basicConfig(
-        level=logging.INFO,
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
         format=log_format,
         datefmt=date_format,
-        handlers=[
-            logging.StreamHandler(sys.stdout)  # Вывод в stdout для Docker
-        ]
+        handlers=[logging.StreamHandler(sys.stdout)],
     )
-    
-    # Установка уровня логирования для внешних библиотек
-    logging.getLogger('httpx').setLevel(logging.WARNING)
-    logging.getLogger('telegram').setLevel(logging.WARNING)
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
 
-# Инициализация логирования при импорте модуля
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("telegram").setLevel(logging.WARNING)
+    logging.getLogger("telethon").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp").setLevel(logging.WARNING)
+
+
 setup_logging()
-
-# Получить логгер для этого модуля
 logger = logging.getLogger(__name__)
 
-# Telegram Bot Configuration
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-if not TELEGRAM_BOT_TOKEN:
-    raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set")
+DATA_DIR = Path(os.getenv("DATA_DIR", "data"))
+LOGS_DIR = Path(os.getenv("LOGS_DIR", "logs"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-# LLM API Configuration
-LLM_API_URL = os.getenv("LLM_API_URL")
-if not LLM_API_URL:
-    raise ValueError("LLM_API_URL environment variable is not set")
+# Telegram Bot API configuration. The admin panel can run without this token.
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
-LLM_MODEL_NAME = os.getenv("LLM_MODEL_NAME")
-if not LLM_MODEL_NAME:
-    raise ValueError("LLM_MODEL_NAME environment variable is not set")
+# Telegram user-account parser configuration (MTProto Client API).
+TELETHON_API_ID = os.getenv("TELETHON_API_ID", "").strip()
+TELETHON_API_HASH = os.getenv("TELETHON_API_HASH", "").strip()
+TELETHON_PHONE = os.getenv("TELETHON_PHONE", "").strip()
+TELETHON_SESSION_FILE = os.getenv(
+    "TELETHON_SESSION_FILE",
+    str(DATA_DIR / "telethon_session.session"),
+)
 
-# Database configuration (может быть переопределено через переменную окружения)
-DATABASE_PATH = os.getenv("DATABASE_PATH", "news_bot.db")
+# LM Studio configuration. Native /api/v1 is preferred; OpenAI-compatible mode is
+# available as a fallback for older setups and external compatible servers.
+LM_STUDIO_BASE_URL = os.getenv(
+    "LM_STUDIO_BASE_URL",
+    os.getenv("LLM_API_URL", "http://localhost:1234"),
+).strip()
+LM_STUDIO_API_TOKEN = os.getenv(
+    "LM_STUDIO_API_TOKEN",
+    os.getenv("LLM_API_TOKEN", ""),
+).strip()
+LM_STUDIO_MODEL = os.getenv(
+    "LM_STUDIO_MODEL",
+    os.getenv("LLM_MODEL_NAME", ""),
+).strip()
+LM_STUDIO_API_MODE = os.getenv("LM_STUDIO_API_MODE", "native").strip().lower()
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+LLM_MAX_OUTPUT_TOKENS = _int_env("LLM_MAX_OUTPUT_TOKENS", 2048)
+LLM_CONTEXT_LENGTH = _int_env("LLM_CONTEXT_LENGTH", 8192)
 
-# Channels configuration file (может быть переопределено через переменную окружения)
-CHANNELS_JSON_PATH = os.getenv("CHANNELS_JSON_PATH", "channels.json")
+# Backward-compatible names used by older modules.
+LLM_API_URL = LM_STUDIO_BASE_URL
+LLM_MODEL_NAME = LM_STUDIO_MODEL
 
-# Scheduler configuration (check interval in seconds)
-CHECK_INTERVAL_SECONDS = 3600  # 1 hour
+DATABASE_PATH = os.getenv("DATABASE_PATH", str(DATA_DIR / "news_bot.db"))
+CHANNELS_JSON_PATH = os.getenv("CHANNELS_JSON_PATH", str(DATA_DIR / "channels.json"))
 
-# Parser configuration
+CHECK_INTERVAL_SECONDS = _int_env("CHECK_INTERVAL_SECONDS", 3600)
+AUTO_PARSE_ENABLED = _bool_env("AUTO_PARSE_ENABLED", False)
+AUTO_PARSE_LIMIT = _int_env("AUTO_PARSE_LIMIT", 200)
+AUTO_PARSE_DAYS = _int_env("AUTO_PARSE_DAYS", 7)
 
-# Telethon parser configuration (MTProto Client API)
-TELETHON_API_ID = os.getenv("TELETHON_API_ID")  # Get from https://my.telegram.org
-TELETHON_API_HASH = os.getenv("TELETHON_API_HASH")  # Get from https://my.telegram.org
-TELETHON_PHONE = os.getenv("TELETHON_PHONE")  # Phone number with country code (e.g., +1234567890)
-TELETHON_SESSION_FILE = os.getenv("TELETHON_SESSION_FILE", "data/telethon_session.session")
+WEB_PARSER_HEADLESS = _bool_env("WEB_PARSER_HEADLESS", True)
+WEB_PARSER_TIMEOUT = _int_env("WEB_PARSER_TIMEOUT", 30)
+WEB_PARSER_ENGINE = os.getenv("WEB_PARSER_ENGINE", "playwright").strip().lower()
 
-# Web parser configuration
-WEB_PARSER_HEADLESS = os.getenv("WEB_PARSER_HEADLESS", "true").lower() == "true"  # Run browser in headless mode
-WEB_PARSER_TIMEOUT = int(os.getenv("WEB_PARSER_TIMEOUT", "30"))  # Timeout in seconds
-WEB_PARSER_ENGINE = os.getenv("WEB_PARSER_ENGINE", "playwright")  # 'playwright' or 'selenium'
+RSS_PARSER_TIMEOUT = _int_env("RSS_PARSER_TIMEOUT", 15)
 
-# RSS parser configuration
-RSS_PARSER_TIMEOUT = int(os.getenv("RSS_PARSER_TIMEOUT", "10"))  # Timeout in seconds for fetching RSS feeds
-
-# Parser priority (order matters - first tried first)
-PARSER_PRIORITY_STR = os.getenv("PARSER_PRIORITY", '["telethon", "web", "rss"]')
+PARSER_PRIORITY_STR = os.getenv("PARSER_PRIORITY", '["telethon", "rss", "web"]')
 try:
-    import json
     PARSER_PRIORITY = json.loads(PARSER_PRIORITY_STR)
+    if not isinstance(PARSER_PRIORITY, list):
+        raise ValueError("PARSER_PRIORITY must be a JSON list")
 except (json.JSONDecodeError, ValueError):
-    PARSER_PRIORITY = ["telethon", "web", "rss"]  # Default priority
+    PARSER_PRIORITY = ["telethon", "rss", "web"]
+
+
+def _db_setting(key: str, default=None):
+    """Read a setting from the DB app_settings table, falling back to *default*."""
+    try:
+        import sqlite3
+
+        db_path = DATABASE_PATH
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+        row = cur.fetchone()
+        conn.close()
+        if row:
+            val = json.loads(row["value"])
+            if val not in (None, ""):
+                return val
+    except Exception:
+        pass
+    return default
+
+
+def get_bot_token() -> str:
+    """Telegram bot token: DB override > env."""
+    return str(_db_setting("telegram_bot_token") or TELEGRAM_BOT_TOKEN).strip()
+
+
+def get_telethon_api_id() -> str:
+    return str(_db_setting("telethon_api_id") or TELETHON_API_ID).strip()
+
+
+def get_telethon_api_hash() -> str:
+    return str(_db_setting("telethon_api_hash") or TELETHON_API_HASH).strip()
+
+
+def get_telethon_phone() -> str:
+    return str(_db_setting("telethon_phone") or TELETHON_PHONE).strip()
+
+
+def get_auto_parse_enabled() -> bool:
+    val = _db_setting("auto_parse_enabled")
+    if val is not None:
+        return bool(val)
+    return AUTO_PARSE_ENABLED
+
+
+def get_check_interval() -> int:
+    return int(_db_setting("check_interval_seconds") or CHECK_INTERVAL_SECONDS)
+
+
+def get_auto_parse_limit() -> int:
+    return int(_db_setting("auto_parse_limit") or AUTO_PARSE_LIMIT)
+
+
+def get_auto_parse_days() -> int:
+    return int(_db_setting("auto_parse_days") or AUTO_PARSE_DAYS)
 

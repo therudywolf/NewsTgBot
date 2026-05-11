@@ -7,6 +7,7 @@ import asyncio
 
 from .base import BaseParser
 import config
+from source_identity import stable_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -150,10 +151,10 @@ class RSSParser(BaseParser):
             # Determine RSS URL
             if channel_username.startswith('http://') or channel_username.startswith('https://'):
                 rss_url = channel_username
-                channel_id = hash(channel_username) % (10 ** 9)  # Generate pseudo ID from URL
+                channel_id = stable_source_id(channel_username, "rss")
             else:
                 rss_url = self._get_rss_url(channel_username)
-                channel_id = hash(channel_username) % (10 ** 9)
+                channel_id = stable_source_id(channel_username, "rss")
             
             # Fetch RSS feed
             feed = await self._fetch_rss(rss_url)
@@ -185,26 +186,30 @@ class RSSParser(BaseParser):
                     if cutoff_date and entry_date < cutoff_date:
                         continue
                     
-                    # Get text content
-                    text = ""
-                    if hasattr(entry, 'summary'):
-                        text = entry.summary
-                    elif hasattr(entry, 'description'):
-                        text = entry.description
-                    elif hasattr(entry, 'title'):
-                        text = entry.title
-                    
+                    title = entry.get('title', '').strip()
+                    summary = entry.get('summary') or entry.get('description') or ''
+                    link = entry.get('link', '').strip()
+
                     # Clean HTML tags if present
                     import re
-                    text = re.sub(r'<[^>]+>', '', text)
-                    text = text.strip()
+                    summary = re.sub(r'<[^>]+>', '', summary).strip()
+
+                    text_parts = []
+                    if title:
+                        text_parts.append(title)
+                    if summary and summary.lower() not in {title.lower(), 'comments'}:
+                        text_parts.append(summary)
+                    if link:
+                        text_parts.append(f"Source: {link}")
+
+                    text = "\n".join(text_parts).strip()
                     
                     if not text:
                         result['skipped'] += 1
                         continue
                     
                     # Generate message_id from entry link or title hash
-                    message_id = hash(entry.get('link', entry.get('title', str(entry_date)))) % (10 ** 9)
+                    message_id = stable_source_id(entry.get('link', entry.get('title', str(entry_date))), "rss-message")
                     
                     # Format message
                     msg_dict = {
@@ -232,4 +237,3 @@ class RSSParser(BaseParser):
             logger.error(f"Error parsing RSS feed {channel_username}: {e}", exc_info=True)
             result['errors'] += 1
             return result
-

@@ -1,206 +1,363 @@
-"""LLM client for deduplication and aggregation."""
-import aiohttp
+"""LM Studio client for model discovery, loading, and news processing."""
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
+
+import aiohttp
+
 import config
 
 logger = logging.getLogger(__name__)
 
 
 class LLMClient:
-    """Client for interacting with LLM API."""
-    
-    def __init__(self, api_url: str = None, model_name: str = None):
-        """Initialize LLM client."""
-        self.api_url = api_url or config.LLM_API_URL
-        self.model_name = model_name or config.LLM_MODEL_NAME
-        
-        # Remove trailing slash if present
-        if self.api_url.endswith('/'):
-            self.api_url = self.api_url.rstrip('/')
-    
-    async def _make_request(self, prompt: str, system_prompt: str = None) -> Optional[str]:
-        """Make request to LLM API."""
-        # Determine the API endpoint - common patterns are /v1/chat/completions or /api/v1/chat/completions
-        # Try the most common endpoint first
-        endpoint = f"{self.api_url}/v1/chat/completions"
-        
-        payload = {
-            "model": self.model_name,
-            "messages": []
-        }
-        
-        if system_prompt:
-            payload["messages"].append({
-                "role": "system",
-                "content": system_prompt
-            })
-        
-        payload["messages"].append({
-            "role": "user",
-            "content": prompt
-        })
-        
+    """Client for LM Studio native v1 and OpenAI-compatible APIs."""
+
+    def __init__(
+        self,
+        api_url: str = None,
+        model_name: str = None,
+        api_token: str = None,
+        api_mode: str = None,
+    ):
+        self._api_url_explicit = api_url is not None
+        self._api_mode_explicit = api_mode is not None
+        self._model_explicit = model_name is not None
+        self.api_url = self._normalize_base_url(api_url or config.LM_STUDIO_BASE_URL)
+        self.model_name = model_name or config.LM_STUDIO_MODEL
+        self.api_token = api_token if api_token is not None else config.LM_STUDIO_API_TOKEN
+        self.api_mode = (api_mode or config.LM_STUDIO_API_MODE or "native").lower()
+
+    @staticmethod
+    def _normalize_base_url(url: str) -> str:
+        normalized = (url or "http://localhost:1234").strip().rstrip("/")
+        for suffix in ("/api/v1", "/v1"):
+            if normalized.endswith(suffix):
+                return normalized[: -len(suffix)]
+        return normalized
+
+    def _headers(self) -> Dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
+        return headers
+
+    def _resolve_model_name(self) -> Optional[str]:
+        if self.model_name and self._model_explicit:
+            return self.model_name
+
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    endpoint,
-                    json=payload,
-                    headers={"Content-Type": "application/json"},
-                    timeout=aiohttp.ClientTimeout(total=120)
-                ) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        # Extract the response text from common response formats
-                        if "choices" in data and len(data["choices"]) > 0:
-                            return data["choices"][0]["message"]["content"]
-                        elif "text" in data:
-                            return data["text"]
-                        else:
-                            # If response format is different, try to get the first available text field
-                            return str(data)
-                    else:
-                        error_text = await response.text()
-                        logger.error(f"LLM API error {response.status}: {error_text}")
-                        return None
-        except aiohttp.ClientError as e:
-            logger.error(f"LLM API request error: {e}")
-            return None
+            from database import Database
+
+            stored_model = Database().get_setting("lm_studio_model")
+            if stored_model:
+                self.model_name = stored_model
+                return stored_model
         except Exception as e:
-            logger.error(f"Unexpected error in LLM request: {e}")
+            logger.debug("Could not resolve LM Studio model from DB settings: %s", e)
+
+        return self.model_name or None
+
+    def _resolve_base_url(self) -> str:
+        if self._api_url_explicit:
+            return self.api_url
+
+        try:
+            from database import Database
+
+            stored_url = Database().get_setting("lm_studio_base_url")
+            if stored_url:
+                self.api_url = self._normalize_base_url(stored_url)
+        except Exception as e:
+            logger.debug("Could not resolve LM Studio base URL from DB settings: %s", e)
+
+        return self.api_url
+
+    def _resolve_api_mode(self) -> str:
+        if self._api_mode_explicit:
+            return self.api_mode
+
+        try:
+            from database import Database
+
+            stored_mode = Database().get_setting("lm_studio_api_mode")
+            if stored_mode:
+                self.api_mode = str(stored_mode).lower()
+        except Exception as e:
+            logger.debug("Could not resolve LM Studio API mode from DB settings: %s", e)
+
+        return self.api_mode
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        payload: Dict[str, Any] = None,
+        timeout_seconds: int = 120,
+    ) -> Dict[str, Any]:
+        url = f"{self._resolve_base_url()}{path}"
+        timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.request(
+                method,
+                url,
+                json=payload,
+                headers=self._headers(),
+            ) as response:
+                text = await response.text()
+                try:
+                    data = json.loads(text) if text else {}
+                except json.JSONDecodeError:
+                    data = {"raw": text}
+
+                if response.status >= 400:
+                    raise RuntimeError(f"LM Studio API error {response.status}: {data}")
+                return data
+
+    async def list_models(self) -> List[Dict[str, Any]]:
+        """Return models from LM Studio, preferring the native v1 endpoint."""
+        if self._resolve_api_mode() == "openai":
+            data = await self._request("GET", "/v1/models", timeout_seconds=20)
+            return [
+                {
+                    "key": item.get("id"),
+                    "display_name": item.get("id"),
+                    "type": "llm",
+                    "loaded_instances": [],
+                    "source": "openai-compatible",
+                }
+                for item in data.get("data", [])
+            ]
+
+        data = await self._request("GET", "/api/v1/models", timeout_seconds=20)
+        return data.get("models", [])
+
+    async def load_model(
+        self,
+        model: str,
+        context_length: Optional[int] = None,
+        flash_attention: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Load an LM Studio model through native v1 API."""
+        payload: Dict[str, Any] = {"model": model, "echo_load_config": True}
+        if context_length:
+            payload["context_length"] = context_length
+        if flash_attention is not None:
+            payload["flash_attention"] = flash_attention
+
+        data = await self._request("POST", "/api/v1/models/load", payload, timeout_seconds=600)
+        self.model_name = model
+        return data
+
+    async def test_connection(self) -> Dict[str, Any]:
+        """Check server reachability and return a small status payload."""
+        models = await self.list_models()
+        loaded = [
+            model
+            for model in models
+            if model.get("loaded_instances")
+        ]
+        return {
+            "base_url": self._resolve_base_url(),
+            "api_mode": self._resolve_api_mode(),
+            "models_count": len(models),
+            "loaded_count": len(loaded),
+            "selected_model": self._resolve_model_name(),
+            "auth_configured": bool(self.api_token),
+        }
+
+    async def _make_request(self, prompt: str, system_prompt: str = None) -> Optional[str]:
+        """Make a chat request to LM Studio."""
+        model = self._resolve_model_name()
+        if not model:
+            logger.error("LM Studio model is not configured")
             return None
-    
+
+        try:
+            if self._resolve_api_mode() == "openai":
+                return await self._make_openai_request(model, prompt, system_prompt)
+            return await self._make_native_request(model, prompt, system_prompt)
+        except Exception as e:
+            logger.error("LM Studio request failed: %s", e)
+            return None
+
+    async def _make_native_request(
+        self,
+        model: str,
+        prompt: str,
+        system_prompt: str = None,
+    ) -> Optional[str]:
+        payload = {
+            "model": model,
+            "input": prompt,
+            "temperature": config.LLM_TEMPERATURE,
+            "max_output_tokens": config.LLM_MAX_OUTPUT_TOKENS,
+            "context_length": config.LLM_CONTEXT_LENGTH,
+            "store": False,
+        }
+        if system_prompt:
+            payload["system_prompt"] = system_prompt
+        data = await self._request("POST", "/api/v1/chat", payload)
+        return self._extract_native_text(data)
+
+    async def _make_openai_request(
+        self,
+        model: str,
+        prompt: str,
+        system_prompt: str = None,
+    ) -> Optional[str]:
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": config.LLM_TEMPERATURE,
+            "max_tokens": config.LLM_MAX_OUTPUT_TOKENS,
+        }
+        data = await self._request("POST", "/v1/chat/completions", payload)
+        choices = data.get("choices") or []
+        if not choices:
+            return None
+        message = choices[0].get("message") or {}
+        return message.get("content")
+
+    @staticmethod
+    def _extract_native_text(data: Dict[str, Any]) -> Optional[str]:
+        output = data.get("output")
+        if isinstance(output, str):
+            return output
+
+        parts = []
+        if isinstance(output, list):
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") != "message":
+                    continue
+                content = item.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and isinstance(block.get("text"), str):
+                            parts.append(block["text"])
+
+        if parts:
+            return "\n".join(parts).strip()
+
+        if isinstance(data.get("text"), str):
+            return data["text"]
+        return None
+
     async def deduplicate_news(self, news_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use LLM to deduplicate news items."""
         if not news_items:
             return []
-        
-        # Format news items for the prompt
+
         news_text = ""
         for idx, item in enumerate(news_items, 1):
-            text = item.get('text', '').strip()
+            text = item.get("text", "").strip()
             if text:
                 news_text += f"{idx}. {text}\n\n"
-        
-        system_prompt = """Ты помощник для удаления дубликатов новостей. 
+
+        system_prompt = """Ты помощник для удаления дубликатов новостей.
 Твоя задача - проанализировать список новостей и определить, какие из них являются дубликатами или описывают одно и то же событие.
 Верни только уникальные новости, удалив все дубликаты и повторы.
 
 Важно: верни ТОЛЬКО номера уникальных новостей в формате JSON массива чисел, например: [1, 3, 5, 7]
 Не включай в ответ никаких дополнительных объяснений или текста, только JSON массив."""
-        
-        user_prompt = f"""Проанализируй следующие новости и определи, какие из них уникальны (не дубликаты):
+
+        user_prompt = f"""Проанализируй следующие новости и определи, какие из них уникальны:
 
 {news_text}
 
-Верни JSON массив с номерами уникальных новостей (начиная с 1)."""
-        
+Верни JSON массив с номерами уникальных новостей, начиная с 1."""
+
         response = await self._make_request(user_prompt, system_prompt)
-        
         if not response:
-            # If LLM fails, return all items
             return news_items
-        
-        # Try to parse the response as JSON
+
         try:
-            # Clean the response - remove markdown code blocks if present
-            response = response.strip()
-            if response.startswith("```"):
-                # Remove markdown code blocks
-                lines = response.split('\n')
-                response = '\n'.join(lines[1:-1]) if len(lines) > 2 else response
-            if response.startswith("```json"):
-                lines = response.split('\n')
-                response = '\n'.join(lines[1:-1]) if len(lines) > 2 else response
-            
-            indices = json.loads(response)
+            cleaned = self._strip_json_markdown(response)
+            indices = json.loads(cleaned)
             if isinstance(indices, list) and all(isinstance(i, int) for i in indices):
-                # Convert 1-based indices to 0-based
                 unique_indices = [i - 1 for i in indices if 1 <= i <= len(news_items)]
-                return [news_items[i] for i in unique_indices if 0 <= i < len(news_items)]
+                return [news_items[i] for i in unique_indices]
         except (json.JSONDecodeError, ValueError, IndexError) as e:
-            logger.warning(f"Error parsing deduplication response: {e}")
-            logger.debug(f"Response was: {response}")
-            # If parsing fails, return all items
-            return news_items
-        
+            logger.warning("Error parsing deduplication response: %s", e)
+            logger.debug("Response was: %s", response)
+
         return news_items
-    
+
     async def aggregate_news(self, news_items: List[Dict[str, Any]], period_description: str = "") -> str:
         """Use LLM to aggregate news items into a summary."""
         if not news_items:
             return "Новостей за указанный период не найдено."
-        
-        # Format news items for the prompt
+
         news_text = ""
         for idx, item in enumerate(news_items, 1):
-            text = item.get('text', '').strip()
-            channel = item.get('title') or item.get('username', 'Неизвестный канал')
-            date = item.get('date', '')
+            text = item.get("text", "").strip()
+            channel = item.get("title") or item.get("username", "Неизвестный источник")
+            date = item.get("date", "")
             if text:
-                news_text += f"{idx}. [{channel}] {text}\n\n"
-        
-        system_prompt = """Ты помощник для создания кратких сводок новостей.
-Твоя задача - проанализировать список новостей и создать краткую, структурированную сводку того, что произошло.
-Сводка должна быть информативной, но краткой. Сгруппируй похожие события вместе.
-Используй понятный и структурированный формат."""
-        
+                news_text += f"{idx}. [{channel}] {date}\n{text}\n\n"
+
+        system_prompt = """Ты редактор IT-новостей.
+Собери краткую, структурированную сводку. Группируй похожие события, убирай повторы, сохраняй факты и источники.
+Пиши на русском языке, без рекламного тона."""
+
         user_prompt = f"""Создай краткую сводку новостей за период {period_description}:
 
 {news_text}
 
-Создай структурированную сводку основных событий. Будь кратким, но информативным."""
-        
+Формат:
+1. Короткий заголовок темы
+2. 1-3 предложения с сутью
+3. Источники в скобках, если они есть в списке"""
+
         response = await self._make_request(user_prompt, system_prompt)
-        
         if not response:
-            return "Ошибка при генерации сводки новостей. Попробуйте позже."
-        
+            return "Ошибка при генерации сводки новостей. Проверьте LM Studio, модель и API token."
+
         return response.strip()
-    
+
     async def generate_tags(self, news_text: str) -> List[str]:
         """Use LLM to generate tags for a news item."""
         if not news_text or not news_text.strip():
             return []
-        
+
         system_prompt = """Ты помощник для генерации тегов новостей.
-Твоя задача - проанализировать текст новости и создать 3-5 релевантных тегов.
+Верни только JSON массив из 3-5 коротких тегов на русском языке."""
 
-Важно: верни ТОЛЬКО теги в формате JSON массива строк, например: ["тег1", "тег2", "тег3"]
-Теги должны быть короткими (1-3 слова), на русском языке, без специальных символов.
-Не включай в ответ никаких дополнительных объяснений или текста, только JSON массив."""
-        
-        user_prompt = f"""Проанализируй следующую новость и создай 3-5 релевантных тегов:
+        user_prompt = f"""Проанализируй новость и создай 3-5 релевантных тегов:
 
-{news_text}
+{news_text}"""
 
-Верни JSON массив с тегами."""
-        
         response = await self._make_request(user_prompt, system_prompt)
-        
         if not response:
             return []
-        
-        # Try to parse the response as JSON
+
         try:
-            # Clean the response - remove markdown code blocks if present
-            response = response.strip()
-            if response.startswith("```"):
-                lines = response.split('\n')
-                response = '\n'.join(lines[1:-1]) if len(lines) > 2 else response
-            if response.startswith("```json"):
-                lines = response.split('\n')
-                response = '\n'.join(lines[1:-1]) if len(lines) > 2 else response
-            
-            tags = json.loads(response)
+            tags = json.loads(self._strip_json_markdown(response))
             if isinstance(tags, list) and all(isinstance(tag, str) for tag in tags):
-                # Normalize tags: lowercase, strip, filter empty
-                normalized_tags = [tag.lower().strip() for tag in tags if tag.strip()]
-                return normalized_tags[:5]  # Limit to 5 tags
+                return [tag.lower().strip() for tag in tags if tag.strip()][:5]
         except (json.JSONDecodeError, ValueError) as e:
-            logger.warning(f"Error parsing tags response: {e}")
-            logger.debug(f"Response was: {response}")
-        
+            logger.warning("Error parsing tags response: %s", e)
+            logger.debug("Response was: %s", response)
+
         return []
 
+    @staticmethod
+    def _strip_json_markdown(response: str) -> str:
+        cleaned = response.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.splitlines()
+            if len(lines) >= 2:
+                cleaned = "\n".join(lines[1:-1]).strip()
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+        return cleaned

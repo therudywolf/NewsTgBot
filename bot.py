@@ -13,6 +13,7 @@ import channel_reader
 import deduplicator
 import llm_client
 import scheduler
+from source_identity import stable_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -154,15 +155,15 @@ class NewsBot:
         category_data = categories.get(category_id, {})
         sources = category_data.get("sources", [])
         
-        existing_channels = {ch.get('username'): ch.get('channel_id') for ch in self.db.get_all_channels()}
+        existing_channel_ids = {ch.get('channel_id') for ch in self.db.get_all_channels()}
         
         for source in sources:
             title = source.get("title", "Unknown")
             username = source.get("username", "")
             source_type = source.get("source_type", "rss")
             
-            # Check if already added
-            is_added = username in existing_channels
+            identifier = source.get("source_config", {}).get("rss_url") if source_type == "rss" else username
+            is_added = stable_source_id(identifier or username, source_type) in existing_channel_ids
             prefix = "✅ " if is_added else ""
             
             buttons.append([
@@ -301,7 +302,7 @@ class NewsBot:
                     title = channel_info.get('title', username)
                     # If parser returned channel_id, use it, otherwise generate pseudo ID
                     if not channel_id:
-                        channel_id = hash(username) % (10 ** 9)
+                        channel_id = stable_source_id(username, "telegram")
             except Exception as parser_error:
                 logger.warning(f"Parsers also failed: {parser_error}")
         
@@ -348,11 +349,10 @@ class NewsBot:
         try:
             chat = await context.bot.get_chat(f"@{username}" if username else channel_input)
             channel_id = chat.id
-        except:
-            # Try as numeric ID
+        except Exception:
             try:
                 channel_id = int(channel_input)
-            except:
+            except (ValueError, TypeError):
                 pass
         
         if not channel_id:
@@ -503,7 +503,7 @@ class NewsBot:
                 start_date = datetime.fromisoformat(match.group(1) + "T00:00:00")
                 end_date = datetime.fromisoformat(match.group(2) + "T23:59:59")
                 return start_date, end_date
-            except:
+            except ValueError:
                 return None, None
         
         return None, None
@@ -513,7 +513,7 @@ class NewsBot:
         try:
             with open(config.CHANNELS_JSON_PATH, 'r', encoding='utf-8') as f:
                 channels = json.load(f)
-        except:
+        except (FileNotFoundError, json.JSONDecodeError):
             channels = []
         
         # Check if already exists
@@ -536,7 +536,7 @@ class NewsBot:
         try:
             with open(config.CHANNELS_JSON_PATH, 'r', encoding='utf-8') as f:
                 channels = json.load(f)
-        except:
+        except (FileNotFoundError, json.JSONDecodeError):
             return
         
         channels = [ch for ch in channels if ch.get('channel_id') != channel_id]
@@ -960,7 +960,7 @@ class NewsBot:
             username = channel_input.replace("https://t.me/", "").lstrip("/")
         elif channel_input.startswith("http://") or channel_input.startswith("https://"):
             # RSS URL or web URL - handle as RSS source
-            channel_id = hash(channel_input) % (10 ** 9)
+            channel_id = stable_source_id(channel_input, "rss")
             title = channel_input.split("/")[-1] or "RSS Feed"
             success = self.db.add_channel(channel_id, channel_input, title, source_type='rss')
             if success:
@@ -993,7 +993,7 @@ class NewsBot:
                     title = channel_info.get('title', username)
                     # If parser returned channel_id, use it, otherwise generate pseudo ID
                     if not channel_id:
-                        channel_id = hash(username) % (10 ** 9)
+                        channel_id = stable_source_id(username, "telegram")
             except Exception as parser_error:
                 logger.warning(f"Parsers also failed: {parser_error}")
                 await update.message.reply_text(
@@ -1256,11 +1256,11 @@ class NewsBot:
             if source_type == "rss" and source_config.get("rss_url"):
                 # For RSS, channel_id is hash of rss_url
                 rss_url = source_config.get("rss_url")
-                channel_id = hash(rss_url) % (10 ** 9)
+                channel_id = stable_source_id(rss_url, "rss")
                 is_added = channel_id in existing_channel_ids
             else:
                 # For other sources, channel_id is hash of username
-                channel_id = hash(username) % (10 ** 9)
+                channel_id = stable_source_id(username, source_type)
                 is_added = channel_id in existing_channel_ids
             
             status = "✅ Добавлен" if is_added else "➕ Добавить"
@@ -1307,7 +1307,7 @@ class NewsBot:
             username = source_config.get("rss_url")
         
         # Generate channel_id (hash of username/url)
-        channel_id = hash(username) % (10 ** 9)
+        channel_id = stable_source_id(username, source_type)
         
         # Check if already exists
         existing = self.db.get_channel_by_id(channel_id)
@@ -1342,15 +1342,52 @@ class NewsBot:
         )
     
     async def periodic_check(self):
-        """Periodic check for new messages (placeholder - messages come via handlers)."""
-        # In practice, messages are processed via handle_channel_message
-        # This is a placeholder for any periodic maintenance tasks
-        pass
+        """Periodically parse configured sources."""
+        channels = self.db.get_all_channels()
+        if not channels:
+            return
+
+        parse_limit = config.get_auto_parse_limit()
+        parse_days = config.get_auto_parse_days()
+        total = {'parsed': 0, 'skipped': 0, 'errors': 0}
+        for channel in channels:
+            try:
+                stats = await self.channel_reader.force_parse_channel(
+                    bot=self.app.bot if self.app else None,
+                    channel_id=channel.get('channel_id'),
+                    channel_username=channel.get('username'),
+                    limit=parse_limit,
+                    days=parse_days,
+                )
+                for key in total:
+                    total[key] += stats.get(key, 0)
+            except Exception as e:
+                logger.error(f"Error parsing channel {channel.get('channel_id')}: {e}")
+                total['errors'] += 1
+        logger.info(f"Periodic parsing finished: {total}")
     
     def run(self):
         """Run the bot."""
+        token = config.get_bot_token()
+        if not token:
+            raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Configure it via the admin panel or .env file.")
+
+        async def post_init(application):
+            if config.get_auto_parse_enabled():
+                self.scheduler.start(self.periodic_check)
+
+        async def post_shutdown(application):
+            self.scheduler.stop()
+            await self.channel_reader.parser_manager.close_all()
+
         # Create application
-        self.app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+        self.app = (
+            Application.builder()
+            .token(token)
+            .post_init(post_init)
+            .post_shutdown(post_shutdown)
+            .build()
+        )
         
         # Add handlers
         self.app.add_handler(CommandHandler("start", self.start_command))

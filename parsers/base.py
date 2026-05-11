@@ -122,9 +122,8 @@ class BaseParser(ABC):
         elif isinstance(date_obj, datetime):
             return date_obj.isoformat()
         else:
-            # Try to convert to datetime
             try:
                 return datetime.fromisoformat(str(date_obj)).isoformat()
-            except:
+            except (ValueError, TypeError):
                 return datetime.now().isoformat()
 

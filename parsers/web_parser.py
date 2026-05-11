@@ -1,11 +1,12 @@
 """Web parser for parsing Telegram channels via web scraping."""
 import logging
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import re
 
 from .base import BaseParser
 import config
+from source_identity import stable_source_id
 
 logger = logging.getLogger(__name__)
 
@@ -192,12 +193,12 @@ class WebParser(BaseParser):
                 return result
             
             url = self._get_channel_url(channel_username)
-            channel_id = hash(channel_username) % (10 ** 9)  # Generate pseudo ID
+            channel_id = stable_source_id(channel_username, "web")
             
             # Calculate cutoff date if days specified
             cutoff_date = None
             if days:
-                cutoff_date = datetime.now() - timedelta(days=days)
+                cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
             
             if config.WEB_PARSER_ENGINE.lower() == 'playwright':
                 page = await browser.new_page()
@@ -238,7 +239,10 @@ class WebParser(BaseParser):
                             msg_date = datetime.now()
                         
                         # Skip if too old
-                        if cutoff_date and msg_date < cutoff_date:
+                        compare_date = msg_date
+                        if compare_date.tzinfo is None:
+                            compare_date = compare_date.replace(tzinfo=timezone.utc)
+                        if cutoff_date and compare_date < cutoff_date:
                             continue
                         
                         # Get message ID from data-post attribute or generate from date
@@ -246,9 +250,9 @@ class WebParser(BaseParser):
                         if post_attr:
                             # Format: channel/message_id
                             parts = post_attr.split('/')
-                            message_id = int(parts[-1]) if len(parts) > 1 else hash(text) % (10 ** 9)
+                            message_id = int(parts[-1]) if len(parts) > 1 else stable_source_id(text, "web-message")
                         else:
-                            message_id = hash(f"{text}{msg_date}") % (10 ** 9)
+                            message_id = stable_source_id(f"{text}{msg_date}", "web-message")
                         
                         # Format message
                         msg_dict = {
@@ -311,16 +315,19 @@ class WebParser(BaseParser):
                             msg_date = datetime.now()
                         
                         # Skip if too old
-                        if cutoff_date and msg_date < cutoff_date:
+                        compare_date = msg_date
+                        if compare_date.tzinfo is None:
+                            compare_date = compare_date.replace(tzinfo=timezone.utc)
+                        if cutoff_date and compare_date < cutoff_date:
                             continue
                         
                         # Get message ID
                         post_attr = msg_element.get_attribute('data-post')
                         if post_attr:
                             parts = post_attr.split('/')
-                            message_id = int(parts[-1]) if len(parts) > 1 else hash(text) % (10 ** 9)
+                            message_id = int(parts[-1]) if len(parts) > 1 else stable_source_id(text, "web-message")
                         else:
-                            message_id = hash(f"{text}{msg_date}") % (10 ** 9)
+                            message_id = stable_source_id(f"{text}{msg_date}", "web-message")
                         
                         # Format message
                         msg_dict = {
@@ -359,7 +366,7 @@ class WebParser(BaseParser):
                         await self._playwright.stop()
                 else:
                     self.browser.quit()
-        except:
+        except Exception:
             pass
         finally:
             self.browser = None
