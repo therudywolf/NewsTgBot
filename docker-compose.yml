@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -31,5 +31,5 @@ services:
       [
         "sh",
         "-c",
-        "if [ -n \"$TELEGRAM_BOT_TOKEN\" ]; then python bot.py; else echo 'TELEGRAM_BOT_TOKEN is empty; bot service is waiting'; tail -f /dev/null; fi"
+        "while true; do python bot.py; echo 'bot stopped; retrying in 30 seconds'; sleep 30; done"
       ]

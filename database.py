@@ -19,14 +19,18 @@ class Database:
     
     def _get_connection(self) -> sqlite3.Connection:
         """Get database connection."""
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 30000")
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
     
     def _init_database(self):
         """Initialize database tables."""
         conn = self._get_connection()
         cursor = conn.cursor()
+        cursor.execute("PRAGMA journal_mode = WAL")
+        cursor.execute("PRAGMA synchronous = NORMAL")
         
         # Create channels table
         cursor.execute("""
@@ -750,4 +754,3 @@ class Database:
             except (TypeError, json.JSONDecodeError):
                 settings[row["key"]] = row["value"]
         return settings
-

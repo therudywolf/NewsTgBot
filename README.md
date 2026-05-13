@@ -1,6 +1,22 @@
-# NewsTgBot
+# 🐺 NewsTgBot
+
+> `D34D1N$1D3` :: numb but alive :: self-hosted news aggregation bot
+
+My resources:
+- [Gravatar](https://gravatar.com/therudywolf)
+- [OneToThree](https://onetothree.ru)
+- [Forest blog](https://t.me/theforestserver)
+- [X](https://x.com/therudywolf)
+- [GitHub](https://github.com/therudywolf)
+- [Twitch](https://twitch.tv/therudywolf)
+- [Reddit](https://reddit.com/user/Most-Watercress-6718)
+- [Telegram](https://t.me/rudy_wolf)
+- [YouTube](https://youtube.com/channel/UCXHkoSlaY5QaNmN_l4t0djQ)
 
 Self-hosted IT news aggregator with a web admin panel, Telegram bot, multi-source parsers (RSS, Telethon, web scraping) and local LLM summarisation via LM Studio.
+
+Licensed under **GNU Affero General Public License v3.0 or later** (`AGPL-3.0-or-later`).
+AGPL v3 Copyleft applies to reuse, modification, and network deployment of derived versions.
 
 ## Features
 
@@ -55,7 +71,7 @@ TELETHON_PHONE=+79990000000
 ### LM Studio
 
 ```env
-LM_STUDIO_BASE_URL=http://10.77.77.2:29931
+LM_STUDIO_BASE_URL=http://localhost:1234
 LM_STUDIO_API_TOKEN=
 LM_STUDIO_MODEL=
 LM_STUDIO_API_MODE=native
@@ -145,8 +161,13 @@ python -m pytest tests/ -v
 - RSS and public web pages are used without paid APIs.
 - The Telegram user-account parser uses the official MTProto client API and requires your own `api_id` / `api_hash`.
 - `.env`, `data/`, logs, SQLite databases and Telethon session files are excluded from git.
+- The admin panel can export a `.env` containing live tokens. Keep it private and do not publish generated exports.
 - After changing the bot token in the admin panel, restart the `bot` container to apply.
 
 ## License
 
-[MIT](LICENSE)
+NewsTgBot is free software under the [GNU Affero General Public License v3.0 or later](LICENSE).
+
+Copyright (C) 2026 NewsTgBot contributors.
+
+This program is distributed without any warranty. If you run a modified version over a network, AGPL section 13 requires that users can receive the corresponding source code.

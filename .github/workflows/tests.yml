@@ -1,0 +1,81 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    name: Unit Tests (Python 3.11)
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio pytest-cov
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=. --cov-report=xml --cov-report=html --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Archive test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.python-version }}
+          path: |
+            htmlcov/
+            coverage.xml
+          retention-days: 30
+
+  docker:
+    runs-on: ubuntu-latest
+    name: Docker Build Validation
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image (web)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          tags: newstgbot:web-test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Validate docker-compose
+        run: docker-compose config > /dev/null 2>&1 || exit 1
+
