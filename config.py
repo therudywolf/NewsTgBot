@@ -1,4 +1,13 @@
-"""Configuration module for News Telegram Bot."""
+"""Configuration module for News Telegram Bot.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License.
+See LICENSE file for details.
+"""
 import json
 import logging
 import os

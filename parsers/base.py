@@ -1,4 +1,9 @@
-"""Base parser class for all news source parsers."""
+"""Base parser class for all news source parsers.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from datetime import datetime

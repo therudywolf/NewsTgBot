@@ -1,4 +1,9 @@
-"""Channel reader for fetching messages from Telegram channels."""
+"""Channel reader for fetching messages from Telegram channels.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime

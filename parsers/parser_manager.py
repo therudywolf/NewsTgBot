@@ -1,4 +1,9 @@
-"""Parser manager for coordinating all parsers."""
+"""Parser manager for coordinating all parsers.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 import logging
 from typing import List, Dict, Any, Optional
 from .base import BaseParser

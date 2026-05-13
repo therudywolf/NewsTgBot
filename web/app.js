@@ -38,9 +38,12 @@ async function api(path, options = {}) {
 async function withBusy(button, fn) {
   const original = button.textContent;
   button.disabled = true;
-  button.textContent = "Выполняется";
+  button.textContent = "⏳ Выполняется...";
   try {
     return await fn();
+  } catch (error) {
+    toast(`Ошибка: ${error.message}`);
+    throw error;
   } finally {
     button.disabled = false;
     button.textContent = original;

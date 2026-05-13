@@ -1,4 +1,9 @@
-"""RSS parser for parsing news from RSS feeds."""
+"""RSS parser for parsing news from RSS feeds.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta

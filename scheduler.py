@@ -1,4 +1,9 @@
-"""Scheduler for periodic channel checking."""
+"""Scheduler for periodic channel checking.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 import asyncio
 import logging
 from typing import Callable

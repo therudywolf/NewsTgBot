@@ -1,4 +1,9 @@
-"""Parsers package for news aggregation from various sources."""
+"""Parsers package for news aggregation from various sources.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 from .base import BaseParser
 from .parser_manager import ParserManager
 from .telethon_parser import TelethonParser

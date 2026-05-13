@@ -1,4 +1,9 @@
-"""Telegram user-account integration for selecting and parsing channels."""
+"""Telegram user-account integration for selecting and parsing channels.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 import logging
 from typing import Any, Dict, List, Optional
 

@@ -1,6 +1,11 @@
 # NewsTgBot
 
-Self-hosted IT news aggregator with a web admin panel, Telegram bot, multi-source parsers (RSS, Telethon, web scraping) and local LLM summarisation via LM Studio.
+**Self-hosted IT news aggregator** with a web admin panel, Telegram bot, multi-source parsers (RSS, Telethon, web scraping) and local LLM summarisation via LM Studio.
+
+🔐 **Privacy-first**: Runs entirely on your machine or server. No data leaves your infrastructure.
+🤖 **AI-powered**: Uses local LLM models for intelligent news deduplication and summarization.
+🔧 **Fully configurable**: All settings manageable through a web panel without editing files.
+📡 **Multi-source**: Aggregate from RSS, Telegram channels, and web sources.
 
 ## Features
 
@@ -16,21 +21,29 @@ Self-hosted IT news aggregator with a web admin panel, Telegram bot, multi-sourc
 - **Docker Compose** — panel + bot as separate services sharing a data volume
 - **`.env` export** — generate a ready-to-use `.env` file from the admin panel
 
-## Quick start
+## Quick Start
+
+### Using Docker (Recommended)
 
 ```bash
-cp .env.example .env   # edit if you already have tokens
+# Clone the repository
+git clone https://github.com/therudywolf/NewsTgBot.git
+cd NewsTgBot
+
+# Copy and edit the example environment file
+cp .env.example .env
+# Edit .env with your tokens if you already have them (optional)
+
+# Create required directories
 mkdir -p data logs
+
+# Build and start services
 docker compose up --build
 ```
 
-Open the panel:
+Open the admin panel at: **http://localhost:8000**
 
-```
-http://localhost:8000
-```
-
-The bot worker starts only when `TELEGRAM_BOT_TOKEN` is set (via `.env` or the admin panel). The panel works without it.
+> ℹ️ The Telegram bot worker starts only when `TELEGRAM_BOT_TOKEN` is set (via `.env` or the web panel). The admin panel works without it.
 
 ## Configuration
 
@@ -140,13 +153,37 @@ python bot.py
 python -m pytest tests/ -v
 ```
 
-## Notes
+## Development & Contribution
 
-- RSS and public web pages are used without paid APIs.
-- The Telegram user-account parser uses the official MTProto client API and requires your own `api_id` / `api_hash`.
-- `.env`, `data/`, logs, SQLite databases and Telethon session files are excluded from git.
-- After changing the bot token in the admin panel, restart the `bot` container to apply.
+This is a FOSS project under the **GNU Affero General Public License v3 (AGPL-3.0)**.
+
+### Network Copyleft Clause
+If you run a modified version of NewsTgBot as a networked service, you **must** provide users access to your modified source code. This ensures the freedom principles of FOSS are maintained.
+
+### Contributing
+- Report bugs and feature requests via GitHub Issues
+- Submit improvements via Pull Requests
+- Maintain AGPL-3.0 compliance in any modifications
+- Follow the existing code style and patterns
+
+## Important Notes
+
+- RSS and public web pages are used without paid APIs
+- The Telegram user-account parser uses the official MTProto Client API and requires your own `api_id` / `api_hash` from [my.telegram.org](https://my.telegram.org)
+- `.env`, `data/`, logs, SQLite databases and Telethon session files are excluded from git (see `.gitignore`)
+- After changing the bot token in the admin panel, restart the `bot` container to apply changes
+- No personal data, API keys, or tokens are committed to the repository
+- All settings are persisted in the SQLite database within the `data/` directory
 
 ## License
 
-[MIT](LICENSE)
+This project is licensed under the **GNU Affero General Public License v3 (AGPL-3.0)**. See the [LICENSE](LICENSE) file for details.
+
+### Key terms:
+- **Copyleft**: Any modifications or derivative works must also be released under AGPL-3.0
+- **Network Clause**: If you run this software as a service, you must make the source code available to users
+- **Attribution**: You must retain copyright and license notices
+
+### For more information:
+- Full license text: <https://www.gnu.org/licenses/agpl-3.0.txt>
+- License details: <https://www.gnu.org/licenses/agpl-3.0.html>

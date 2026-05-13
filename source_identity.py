@@ -1,4 +1,9 @@
-"""Stable identifiers for external news sources."""
+"""Stable identifiers for external news sources.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 from hashlib import sha256
 
 

@@ -1,4 +1,9 @@
-"""Deduplication service using LLM."""
+"""Deduplication service using LLM.
+
+NewsTgBot - Self-hosted IT news aggregator
+Copyright (C) 2026 therudywolf
+Licensed under AGPL-3.0
+"""
 from typing import List, Dict, Any
 from llm_client import LLMClient
 
