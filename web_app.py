@@ -470,7 +470,7 @@ async def logout(request: Request):
 
 
 @app.get("/api/status")
-async def status():
+async def get_status():
     stats = db.get_global_stats()
     return {
         "ok": True,
