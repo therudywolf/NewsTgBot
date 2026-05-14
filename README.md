@@ -1,11 +1,12 @@
-# NewsTgBot
+# 🐺 NewsTgBot
 
-**Self-hosted IT news aggregator** with a web admin panel, Telegram bot, multi-source parsers (RSS, Telethon, web scraping) and local LLM summarisation via LM Studio.
+> Wolf-built self-hosted news aggregator for Telegram and the web.
 
-🔐 **Privacy-first**: Runs entirely on your machine or server. No data leaves your infrastructure.
-🤖 **AI-powered**: Uses local LLM models for intelligent news deduplication and summarization.
-🔧 **Fully configurable**: All settings manageable through a web panel without editing files.
-📡 **Multi-source**: Aggregate from RSS, Telegram channels, and web sources.
+![Version](https://img.shields.io/badge/version-0.6.0--beta.1-4c8bf5)
+![Status](https://img.shields.io/badge/status-beta-f59e0b)
+[![License](https://img.shields.io/badge/license-AGPL--3.0--only-22c55e)](LICENSE)
+
+Self-hosted IT news aggregator with a web admin panel, Telegram bot, multi-source parsers, and local LLM summarization.
 
 ## Features
 
