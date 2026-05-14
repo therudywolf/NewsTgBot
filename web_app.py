@@ -13,12 +13,15 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from threading import Lock
+from typing import Any, Deque, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from starlette.middleware.sessions import SessionMiddleware
@@ -53,6 +56,51 @@ PUBLIC_PATHS = {
     "/api/setup/status",
     "/api/setup",
 }
+
+# Sensitive endpoints get a per-IP sliding-window rate limit. The window and
+# max-attempts values are deliberately tight to slow down credential stuffing
+# and admin-setup spam without blocking legitimate users.
+_RATE_LIMIT_WINDOW_SECONDS = 60
+_RATE_LIMITED_PATHS: Dict[str, int] = {
+    "/api/auth/login": 8,
+    "/api/setup": 5,
+}
+_rate_limit_state: Dict[str, Dict[str, Deque[float]]] = defaultdict(
+    lambda: defaultdict(deque)
+)
+_rate_limit_lock = Lock()
+
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+}
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
+    client = request.client
+    return client.host if client else "unknown"
+
+
+def _rate_limit_check(path: str, ip: str, limit: int) -> bool:
+    now = time.monotonic()
+    cutoff = now - _RATE_LIMIT_WINDOW_SECONDS
+    with _rate_limit_lock:
+        bucket = _rate_limit_state[path][ip]
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= limit:
+            return False
+        bucket.append(now)
+        return True
 
 
 class AuthSetupPayload(BaseModel):
@@ -240,22 +288,42 @@ def _is_authenticated(request: Request) -> bool:
 async def admin_auth_middleware(request: Request, call_next):
     path = request.url.path
 
-    if path.startswith("/static/") or path in PUBLIC_PATHS:
-        return await call_next(request)
+    rate_limit = _RATE_LIMITED_PATHS.get(path)
+    if rate_limit is not None and request.method == "POST":
+        ip = _client_ip(request)
+        if not _rate_limit_check(path, ip, rate_limit):
+            response: Response = JSONResponse(
+                {"detail": "Too many requests, slow down"},
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            )
+            response.headers["Retry-After"] = str(_RATE_LIMIT_WINDOW_SECONDS)
+            for header, value in _SECURITY_HEADERS.items():
+                response.headers[header] = value
+            return response
 
-    if path.startswith("/api/") and not is_admin_configured(db):
-        return JSONResponse(
+    if path.startswith("/static/") or path in PUBLIC_PATHS:
+        response = await call_next(request)
+    elif path.startswith("/api/") and not is_admin_configured(db):
+        response = JSONResponse(
             {"detail": "Admin setup required"},
             status_code=status.HTTP_409_CONFLICT,
         )
-
-    if path.startswith("/api/") and not _is_authenticated(request):
-        return JSONResponse(
+    elif path.startswith("/api/") and not _is_authenticated(request):
+        response = JSONResponse(
             {"detail": "Authentication required"},
             status_code=status.HTTP_401_UNAUTHORIZED,
         )
+    else:
+        response = await call_next(request)
 
-    return await call_next(request)
+    for header, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    if config.ADMIN_HTTPS_ONLY:
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
+        )
+    return response
 
 
 # SessionMiddleware must be added AFTER @app.middleware("http") decorators.
@@ -312,11 +380,17 @@ async def login(payload: AuthLoginPayload, request: Request):
 
     username = config.get_admin_username()
     password_hash = config.get_admin_password_hash()
-    if payload.username.strip() != username or not verify_password(payload.password, password_hash):
+    # Always run verify_password to avoid revealing username validity via timing.
+    password_ok = verify_password(payload.password, password_hash)
+    username_ok = payload.username.strip() == username
+    if not (username_ok and password_ok):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    # Rotate the session on successful auth to prevent session fixation.
+    request.session.clear()
     request.session["authenticated"] = True
     request.session["username"] = username
+    request.session["issued_at"] = int(time.time())
     return {"authenticated": True, "username": username}
 
 

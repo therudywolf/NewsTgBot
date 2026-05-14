@@ -50,6 +50,54 @@
           "source_config": {
             "rss_url": "https://feed.infoq.com/"
           }
+        },
+        {
+          "title": "Wired",
+          "username": "wired",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.wired.com/feed/rss"
+          }
+        },
+        {
+          "title": "MIT Technology Review",
+          "username": "mit-technology-review",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.technologyreview.com/feed/"
+          }
+        },
+        {
+          "title": "IEEE Spectrum",
+          "username": "ieee-spectrum",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://spectrum.ieee.org/feeds/feed.rss"
+          }
+        },
+        {
+          "title": "Phoronix",
+          "username": "phoronix",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.phoronix.com/rss.php"
+          }
+        },
+        {
+          "title": "Slashdot",
+          "username": "slashdot",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://rss.slashdot.org/Slashdot/slashdotMain"
+          }
+        },
+        {
+          "title": "ZDNet",
+          "username": "zdnet",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.zdnet.com/news/rss.xml"
+          }
         }
       ]
     },
@@ -62,6 +110,14 @@
           "source_type": "rss",
           "source_config": {
             "rss_url": "https://habr.com/ru/rss/all/all/"
+          }
+        },
+        {
+          "title": "Habr: лучшее",
+          "username": "habr-best",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://habr.com/ru/rss/best/daily/"
           }
         },
         {
@@ -78,6 +134,38 @@
           "source_type": "rss",
           "source_config": {
             "rss_url": "https://3dnews.ru/software-news/rss/"
+          }
+        },
+        {
+          "title": "iXBT",
+          "username": "ixbt",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.ixbt.com/export/news.rss"
+          }
+        },
+        {
+          "title": "vc.ru",
+          "username": "vc-ru",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://vc.ru/rss"
+          }
+        },
+        {
+          "title": "Tproger",
+          "username": "tproger",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://tproger.ru/feed/"
+          }
+        },
+        {
+          "title": "Kod.ru",
+          "username": "kod-ru",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://kod.ru/feed/"
           }
         }
       ]
@@ -115,6 +203,54 @@
           "source_type": "rss",
           "source_config": {
             "rss_url": "https://www.securitylab.ru/_services/export/rss/news/"
+          }
+        },
+        {
+          "title": "Schneier on Security",
+          "username": "schneier-on-security",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.schneier.com/feed/atom/"
+          }
+        },
+        {
+          "title": "Threatpost",
+          "username": "threatpost",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://threatpost.com/feed/"
+          }
+        },
+        {
+          "title": "Dark Reading",
+          "username": "dark-reading",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.darkreading.com/rss.xml"
+          }
+        },
+        {
+          "title": "CISA Alerts",
+          "username": "cisa-alerts",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.cisa.gov/cybersecurity-advisories/all.xml"
+          }
+        },
+        {
+          "title": "Anti-Malware.ru",
+          "username": "anti-malware-ru",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.anti-malware.ru/rss.xml"
+          }
+        },
+        {
+          "title": "Google Project Zero",
+          "username": "google-project-zero",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://googleprojectzero.blogspot.com/feeds/posts/default"
           }
         }
       ]
@@ -169,6 +305,62 @@
           "source_config": {
             "rss_url": "https://martinfowler.com/feed.atom"
           }
+        },
+        {
+          "title": "Netflix Tech Blog",
+          "username": "netflix-tech-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://netflixtechblog.com/feed"
+          }
+        },
+        {
+          "title": "Uber Engineering",
+          "username": "uber-engineering",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.uber.com/blog/engineering/rss/"
+          }
+        },
+        {
+          "title": "Stripe Blog",
+          "username": "stripe-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://stripe.com/blog/feed.rss"
+          }
+        },
+        {
+          "title": "GitLab Blog",
+          "username": "gitlab-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://about.gitlab.com/atom.xml"
+          }
+        },
+        {
+          "title": "HashiCorp Blog",
+          "username": "hashicorp-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.hashicorp.com/blog/feed.xml"
+          }
+        },
+        {
+          "title": "JetBrains Blog",
+          "username": "jetbrains-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://blog.jetbrains.com/feed/"
+          }
+        },
+        {
+          "title": "Discord Engineering",
+          "username": "discord-engineering",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://discord.com/category/engineering/rss"
+          }
         }
       ]
     },
@@ -181,6 +373,14 @@
           "source_type": "rss",
           "source_config": {
             "rss_url": "https://blog.python.org/feeds/posts/default"
+          }
+        },
+        {
+          "title": "PyPI Releases",
+          "username": "pypi-releases",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://pypi.org/rss/updates.xml"
           }
         },
         {
@@ -205,6 +405,184 @@
           "source_type": "rss",
           "source_config": {
             "rss_url": "https://hacks.mozilla.org/feed/"
+          }
+        },
+        {
+          "title": "Go Blog",
+          "username": "go-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://go.dev/blog/feed.atom"
+          }
+        },
+        {
+          "title": "Rust Blog",
+          "username": "rust-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://blog.rust-lang.org/feed.xml"
+          }
+        },
+        {
+          "title": "Ruby on Rails Blog",
+          "username": "rails-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://rubyonrails.org/feed.xml"
+          }
+        },
+        {
+          "title": "Docker Blog",
+          "username": "docker-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.docker.com/blog/feed/"
+          }
+        },
+        {
+          "title": "PostgreSQL News",
+          "username": "postgresql-news",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.postgresql.org/news.rss"
+          }
+        },
+        {
+          "title": "CNCF Blog",
+          "username": "cncf-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.cncf.io/feed/"
+          }
+        },
+        {
+          "title": "DEV Community",
+          "username": "dev-to",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://dev.to/feed"
+          }
+        }
+      ]
+    },
+    "ai_ml": {
+      "name": "AI / Machine Learning",
+      "sources": [
+        {
+          "title": "Hugging Face Blog",
+          "username": "huggingface-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://huggingface.co/blog/feed.xml"
+          }
+        },
+        {
+          "title": "OpenAI Blog",
+          "username": "openai-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://openai.com/news/rss.xml"
+          }
+        },
+        {
+          "title": "Google Research Blog",
+          "username": "google-research-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://research.google/blog/rss/"
+          }
+        },
+        {
+          "title": "DeepMind Blog",
+          "username": "deepmind-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://deepmind.google/blog/rss.xml"
+          }
+        },
+        {
+          "title": "Anthropic News",
+          "username": "anthropic-news",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.anthropic.com/news/rss.xml"
+          }
+        },
+        {
+          "title": "Meta AI Research",
+          "username": "meta-ai-research",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://ai.meta.com/blog/rss/"
+          }
+        },
+        {
+          "title": "MIT News — AI",
+          "username": "mit-news-ai",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://news.mit.edu/topic/mitartificial-intelligence2-rss.xml"
+          }
+        },
+        {
+          "title": "arXiv cs.AI",
+          "username": "arxiv-cs-ai",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://rss.arxiv.org/rss/cs.AI"
+          }
+        },
+        {
+          "title": "Papers with Code",
+          "username": "papers-with-code",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://paperswithcode.com/feeds/latest"
+          }
+        }
+      ]
+    },
+    "opensource": {
+      "name": "Open Source",
+      "sources": [
+        {
+          "title": "Linux Weekly News",
+          "username": "lwn",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://lwn.net/headlines/newrss"
+          }
+        },
+        {
+          "title": "Linux Foundation Blog",
+          "username": "linux-foundation",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://www.linuxfoundation.org/blog/feed"
+          }
+        },
+        {
+          "title": "FSF News",
+          "username": "fsf-news",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://static.fsf.org/fsforg/rss/news.xml"
+          }
+        },
+        {
+          "title": "Mozilla Blog",
+          "username": "mozilla-blog",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://blog.mozilla.org/en/feed/"
+          }
+        },
+        {
+          "title": "It's FOSS",
+          "username": "its-foss",
+          "source_type": "rss",
+          "source_config": {
+            "rss_url": "https://itsfoss.com/feed/"
           }
         }
       ]
