@@ -4,9 +4,6 @@ services:
   panel:
     environment:
       ADMIN_HTTPS_ONLY: "true"
-    ports: []
-    expose:
-      - "8000"
     networks:
       - default
       - proxy

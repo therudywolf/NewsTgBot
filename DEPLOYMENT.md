@@ -25,7 +25,7 @@ mkdir -p data logs
 
 ```bash
 # Build and start services
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
 
 # Check logs
 docker compose logs -f
@@ -63,7 +63,7 @@ chmod 755 data logs
 
 ### Caddy Reverse Proxy on a Subpath
 
-To publish the panel at `https://forestserver.ru/newsbot/`, keep the app on `127.0.0.1:8000` and strip the `/newsbot` prefix before proxying upstream.
+To publish the panel at `https://forestserver.ru/newsbot/`, keep the app internal to Docker, join it to the shared proxy network, and strip the `/newsbot` prefix before proxying upstream.
 
 For the shared proxy network used on this server, deploy with:
 
@@ -76,7 +76,7 @@ forestserver.ru {
     redir /newsbot /newsbot/ 308
 
     handle_path /newsbot/* {
-        reverse_proxy 127.0.0.1:8000
+        reverse_proxy news-tg-bot-panel:8000
     }
 
     # Keep your other site handlers in the same server block.

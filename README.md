@@ -35,7 +35,7 @@ cd NewsTgBot
 mkdir -p data logs
 
 # Build and start services
-docker compose up --build
+docker compose -f docker-compose.yml -f docker-compose.local.yml up --build
 ```
 
 Open the admin panel at: **http://localhost:8000**
@@ -136,7 +136,8 @@ scheduler.py            Periodic parse scheduler
 default_sources.json    Built-in RSS feeds (23 sources, 5 categories)
 migrate_add_source_type.py  DB migration script
 tests/                  Unit tests
-docker-compose.yml      Panel + bot services
+docker-compose.yml      Base services for Docker-only deployment
+docker-compose.local.yml Local host port publishing for admin panel
 Dockerfile              Python 3.11 + Playwright + Chromium
 ```
 
