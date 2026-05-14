@@ -33,6 +33,7 @@ from database import Database
 from deduplicator import Deduplicator
 from llm_client import LLMClient
 import pipeline_executor
+from pipeline_scheduler import PipelineScheduler, validate_cron
 import poster
 from source_identity import stable_source_id
 from telegram_account import TelegramAccountService
@@ -45,6 +46,7 @@ STATIC_DIR = ROOT_DIR / "web"
 db = Database()
 channel_reader = ChannelReader(db)
 telegram_account = TelegramAccountService()
+pipeline_scheduler = PipelineScheduler(db, channel_reader, telegram_account)
 
 app = FastAPI(title="NewsTgBot Admin", version="0.2.0")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -933,14 +935,24 @@ async def get_pipeline_endpoint(pipeline_id: int):
     return pipeline
 
 
+def _check_cron(value: Optional[str]) -> Optional[str]:
+    if not value or not value.strip():
+        return None
+    error = validate_cron(value.strip())
+    if error:
+        raise HTTPException(status_code=400, detail=f"Bad cron: {error}")
+    return value.strip()
+
+
 @app.post("/api/pipelines")
 async def create_pipeline_endpoint(payload: PipelinePayload):
+    cron = _check_cron(payload.schedule_cron)
     pipeline_id = db.upsert_pipeline(
         pipeline_id=None,
         name=payload.name.strip(),
         group_name=payload.group_name.strip() or "default",
         enabled=payload.enabled,
-        schedule_cron=(payload.schedule_cron or "").strip() or None,
+        schedule_cron=cron,
         steps=[step.model_dump() for step in payload.steps],
     )
     return db.get_pipeline(pipeline_id)
@@ -950,12 +962,13 @@ async def create_pipeline_endpoint(payload: PipelinePayload):
 async def update_pipeline_endpoint(pipeline_id: int, payload: PipelinePayload):
     if not db.get_pipeline(pipeline_id):
         raise HTTPException(status_code=404, detail="Pipeline not found")
+    cron = _check_cron(payload.schedule_cron)
     db.upsert_pipeline(
         pipeline_id=pipeline_id,
         name=payload.name.strip(),
         group_name=payload.group_name.strip() or "default",
         enabled=payload.enabled,
-        schedule_cron=(payload.schedule_cron or "").strip() or None,
+        schedule_cron=cron,
         steps=[step.model_dump() for step in payload.steps],
     )
     return db.get_pipeline(pipeline_id)
@@ -1085,10 +1098,12 @@ async def startup_event():
     _apply_log_level()
     _write_runtime_env()
     _seed_default_prompts()
+    pipeline_scheduler.start()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    await pipeline_scheduler.stop()
     await telegram_account.disconnect()
     if channel_reader.parser_manager is not None:
         await channel_reader.parser_manager.close_all()
