@@ -392,6 +392,11 @@ async def admin_auth_middleware(request: Request, call_next):
             "Strict-Transport-Security",
             "max-age=31536000; includeSubDomains",
         )
+    # Static assets ship with cache-busting query strings, but we still
+    # tell browsers to revalidate so a forced reload always wins. This
+    # keeps the panel from running yesterday's app.js after a redeploy.
+    if path.startswith("/static/") or path == "/":
+        response.headers.setdefault("Cache-Control", "no-cache, must-revalidate")
     return response
 
 

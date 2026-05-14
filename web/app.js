@@ -134,11 +134,18 @@ const pageLoaders = {};
 const pageLoaded = new Set();
 const DEFAULT_PAGE = "dashboard";
 
-async function navigate() {
+function _resolveTarget() {
   const hash = (window.location.hash || `#${DEFAULT_PAGE}`).replace("#", "");
   const [tab] = hash.split("/");
   const target = tab || DEFAULT_PAGE;
+  // Guard against an unknown hash (e.g. someone pasted #foo) — fall back
+  // to the default page instead of leaving the user on a blank screen.
+  const known = qsa("[data-page]").some((el) => el.dataset.page === target);
+  return known ? target : DEFAULT_PAGE;
+}
 
+async function navigate() {
+  const target = _resolveTarget();
   qsa("[data-page]").forEach((el) => {
     el.hidden = el.dataset.page !== target;
   });
@@ -160,6 +167,23 @@ async function navigate() {
 window.addEventListener("hashchange", () => {
   navigate();
 });
+
+function wireTabClicks() {
+  // Don't trust hashchange alone — Safari/iOS occasionally swallow it and
+  // some setups override window.location.hash. Bind explicit clicks on
+  // every tab anchor: prevent default, set hash, call navigate().
+  qsa("[data-tab]").forEach((el) => {
+    el.addEventListener("click", (event) => {
+      event.preventDefault();
+      const target = el.dataset.tab;
+      if (!target) return;
+      if (window.location.hash !== `#${target}`) {
+        history.pushState(null, "", `#${target}`);
+      }
+      navigate();
+    });
+  });
+}
 
 function reloadPage(tab) {
   pageLoaded.delete(tab);
@@ -1489,5 +1513,11 @@ function wireEvents() {
 
 (async () => {
   wireEvents();
+  wireTabClicks();
   await loadAuthState();
+  // Ensure something is shown even if the auth-state path didn't navigate
+  // (no hash + already authenticated, for example).
+  if (!$("app-shell").hidden) {
+    navigate();
+  }
 })();
