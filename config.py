@@ -36,6 +36,16 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def setup_logging():
     """Configure process logging."""
     log_format = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
@@ -89,7 +99,7 @@ LM_STUDIO_MODEL = os.getenv(
     os.getenv("LLM_MODEL_NAME", ""),
 ).strip()
 LM_STUDIO_API_MODE = os.getenv("LM_STUDIO_API_MODE", "native").strip().lower()
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.2"))
+LLM_TEMPERATURE = _float_env("LLM_TEMPERATURE", 0.2)
 LLM_MAX_OUTPUT_TOKENS = _int_env("LLM_MAX_OUTPUT_TOKENS", 2048)
 LLM_CONTEXT_LENGTH = _int_env("LLM_CONTEXT_LENGTH", 8192)
 
@@ -175,4 +185,3 @@ def get_auto_parse_limit() -> int:
 
 def get_auto_parse_days() -> int:
     return int(_db_setting("auto_parse_days") or AUTO_PARSE_DAYS)
-

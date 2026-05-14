@@ -675,7 +675,8 @@ class NewsBot:
             try:
                 is_available = await parser.check_availability()
                 status_text = "активен" if is_available else "недоступен"
-            except:
+            except Exception as e:
+                logger.warning(f"Failed to check availability: {e}")
                 status_text = "недоступен"
         else:
             status_text = "активен"

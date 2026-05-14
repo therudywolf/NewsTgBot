@@ -144,7 +144,7 @@ class ChannelReader:
                     source_type=source_type,
                     limit=limit,
                     days=days,
-                    fallback=True
+                    fallback=False
                 )
                 
                 # Store parsed messages
@@ -204,4 +204,3 @@ class ChannelReader:
             List of available parser type names
         """
         return await self.parser_manager.get_available_parsers()
-

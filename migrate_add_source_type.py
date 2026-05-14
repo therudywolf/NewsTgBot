@@ -94,8 +94,8 @@ def migrate():
 if __name__ == "__main__":
     try:
         migrate()
-        print("Migration completed successfully!")
+        logger.info("Migration completed successfully!")
     except Exception as e:
-        print(f"Migration failed: {e}")
+        logger.info(f"Migration failed: {e}")
         sys.exit(1)
 

@@ -17,7 +17,7 @@ class Scheduler:
     
     def __init__(self, interval_seconds: int = None):
         """Initialize scheduler."""
-        self.interval_seconds = interval_seconds or config.CHECK_INTERVAL_SECONDS
+        self.interval_seconds = interval_seconds
         self.running = False
         self.task = None
     
@@ -28,7 +28,8 @@ class Scheduler:
                 await coro()
             except Exception as e:
                 logger.error(f"Error in scheduled task: {e}", exc_info=True)
-            await asyncio.sleep(self.interval_seconds)
+            interval = self.interval_seconds or config.get_check_interval()
+            await asyncio.sleep(max(60, interval))
     
     def start(self, coro: Callable):
         """Start the scheduler."""
@@ -43,4 +44,3 @@ class Scheduler:
         self.running = False
         if self.task:
             self.task.cancel()
-
