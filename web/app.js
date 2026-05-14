@@ -1,13 +1,15 @@
-const state = {
-  telegramChannels: [],
-  defaults: null,
-  auth: null,
-  models: [],
-  bots: [],
-  prompts: [],
-};
+// NewsTgBot admin panel — tab-routed, lazy-loaded, store-driven.
+// Each page hooks into the global store on first activation; data is
+// fetched once and cached, then refreshed on demand or after mutations.
+
+"use strict";
+
+// ---- Utilities -------------------------------------------------------------
 
 const $ = (id) => document.getElementById(id);
+const qs = (sel, root = document) => root.querySelector(sel);
+const qsa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+
 const rootPath = (() => {
   const path = window.location.pathname;
   if (!path || path === "/") return "";
@@ -50,9 +52,10 @@ async function api(path, options = {}) {
 }
 
 async function withBusy(button, fn) {
+  if (!button) return fn();
   const original = button.textContent;
   button.disabled = true;
-  button.textContent = "⏳ Выполняется...";
+  button.textContent = "⏳";
   try {
     return await fn();
   } catch (error) {
@@ -64,12 +67,108 @@ async function withBusy(button, fn) {
   }
 }
 
-function parserPriorityList() {
-  return $("parser-priority").value
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean);
+function debounce(fn, ms = 250) {
+  let timer = null;
+  return (...args) => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), ms);
+  };
 }
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString();
+  } catch {
+    return iso;
+  }
+}
+
+// ---- Store -----------------------------------------------------------------
+
+function createStore(initial) {
+  const state = { ...initial };
+  const subs = new Map();
+  return {
+    get(key) {
+      return state[key];
+    },
+    set(key, value) {
+      state[key] = value;
+      (subs.get(key) || []).forEach((fn) => {
+        try {
+          fn(value);
+        } catch (e) {
+          console.error("store subscriber failed:", e);
+        }
+      });
+    },
+    subscribe(key, fn) {
+      if (!subs.has(key)) subs.set(key, new Set());
+      subs.get(key).add(fn);
+      return () => subs.get(key).delete(fn);
+    },
+  };
+}
+
+const store = createStore({
+  auth: null,
+  status: null,
+  sources: [],
+  defaults: null,
+  telegramStatus: null,
+  telegramChannels: [],
+  bots: [],
+  prompts: [],
+  models: [],
+  pipelines: [],
+  runs: [],
+  news: [],
+});
+
+// ---- Router & lazy loading -------------------------------------------------
+
+const pageLoaders = {};
+const pageLoaded = new Set();
+const DEFAULT_PAGE = "dashboard";
+
+async function navigate() {
+  const hash = (window.location.hash || `#${DEFAULT_PAGE}`).replace("#", "");
+  const [tab] = hash.split("/");
+  const target = tab || DEFAULT_PAGE;
+
+  qsa("[data-page]").forEach((el) => {
+    el.hidden = el.dataset.page !== target;
+  });
+  qsa("[data-tab]").forEach((el) => {
+    el.classList.toggle("active", el.dataset.tab === target);
+  });
+
+  if (!pageLoaded.has(target) && typeof pageLoaders[target] === "function") {
+    pageLoaded.add(target);
+    try {
+      await pageLoaders[target]();
+    } catch (err) {
+      console.error(`page ${target} loader failed:`, err);
+      toast(`Не удалось загрузить ${target}: ${err.message}`);
+    }
+  }
+}
+
+window.addEventListener("hashchange", () => {
+  navigate();
+});
+
+function reloadPage(tab) {
+  pageLoaded.delete(tab);
+  if (location.hash.replace("#", "").split("/")[0] === tab) {
+    navigate();
+  }
+}
+
+// ---- Auth ------------------------------------------------------------------
 
 function setShellVisibility(isAppVisible) {
   $("app-shell").hidden = !isAppVisible;
@@ -77,7 +176,7 @@ function setShellVisibility(isAppVisible) {
 }
 
 function renderAuth(statePayload) {
-  state.auth = statePayload;
+  store.set("auth", statePayload);
   const configured = !!statePayload.configured;
   const authenticated = !!statePayload.authenticated;
 
@@ -86,16 +185,18 @@ function renderAuth(statePayload) {
   setShellVisibility(configured && authenticated);
 
   if (configured && authenticated) {
-    $("admin-badge").textContent = `admin: ${statePayload.username || "unknown"}`;
+    $("admin-badge").textContent = statePayload.username || "admin";
+    if (!location.hash) {
+      location.hash = `#${DEFAULT_PAGE}`;
+    } else {
+      navigate();
+    }
   }
 }
 
 async function loadAuthState() {
   const auth = await api("/api/auth/status");
   renderAuth(auth);
-  if (auth.configured && auth.authenticated) {
-    await runAll();
-  }
 }
 
 async function setupAdmin() {
@@ -124,318 +225,186 @@ async function login() {
 
 async function logout() {
   await api("/api/auth/logout", { method: "POST", body: "{}" });
-  renderAuth({ configured: true, authenticated: false, username: null });
+  pageLoaded.clear();
+  await loadAuthState();
 }
 
-function renderMetrics(payload) {
-  const stats = payload.stats || {};
-  const config = payload.config || {};
-  const items = [
-    ["Источники", stats.channels_count ?? 0],
-    ["Новости", stats.news_count ?? 0],
-    ["Теги", stats.tags_count ?? 0],
-    ["Telegram Bot", config.telegram_bot_configured ? "OK" : "wait"],
-    ["LM Token", config.lm_studio_token_configured ? "OK" : "нет"],
-    ["Env", config.managed_env_path || "-"],
-  ];
+// ---- Dashboard -------------------------------------------------------------
 
+function renderMetrics(status) {
+  const stats = status?.stats || {};
+  const config = status?.config || {};
+  const items = [
+    ["Каналов", stats.channels_count ?? "—"],
+    ["Новостей", stats.news_count ?? "—"],
+    ["Тегов", stats.tags_count ?? "—"],
+    ["Последняя", fmtDate(stats.latest_date)],
+    ["LM Studio", config.lm_studio_model || "—"],
+    ["Авто-парсинг", config.auto_parse_enabled ? "вкл" : "выкл"],
+  ];
   $("metrics").innerHTML = items
     .map(([label, value]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
     .join("");
+}
 
-  $("status-line").textContent = `БД: ${config.database_path || "-"} · log ${config.log_level || "-"} · ${payload.time || ""}`;
-  $("lm-base-url").value = config.lm_studio_base_url || "";
-  const modelSelect = $("lm-model");
-  const desiredModel = config.lm_studio_model || "";
-  if (desiredModel && !Array.from(modelSelect.options).some((o) => o.value === desiredModel)) {
-    const opt = document.createElement("option");
-    opt.value = desiredModel;
-    opt.textContent = desiredModel;
-    modelSelect.appendChild(opt);
+async function loadDashboard() {
+  const status = await api("/api/status");
+  store.set("status", status);
+  renderMetrics(status);
+
+  const news = await api("/api/news?days=1&limit=10");
+  $("dashboard-news").innerHTML = (news.news || []).length
+    ? (news.news || [])
+        .map((row) => `<div class="item"><div><div class="item-title">${escapeHtml((row.text || "").slice(0, 120))}…</div><div class="item-meta">${escapeHtml(fmtDate(row.date))} · ${escapeHtml(row.title || row.username || "—")}</div></div></div>`)
+        .join("")
+    : `<div class="notice">Новостей за сутки нет.</div>`;
+
+  // Runs panel — placeholder until pipeline runs ship
+  $("dashboard-runs").innerHTML = `<div class="notice">Пайплайны и запуски — на вкладке «Пайплайны».</div>`;
+}
+
+pageLoaders.dashboard = loadDashboard;
+
+// ---- Sources ---------------------------------------------------------------
+
+const sourcesView = {
+  filter: "",
+  group: "all",
+  sortKey: "title",
+  sortDir: 1,
+  selected: new Set(),
+};
+
+function sourceTitle(source) {
+  return source.title || source.username || `#${source.channel_id}`;
+}
+
+function applySourceFilters(rows) {
+  const text = sourcesView.filter.trim().toLowerCase();
+  let filtered = rows;
+  if (sourcesView.group !== "all") {
+    filtered = filtered.filter((r) => r.source_type === sourcesView.group);
   }
-  modelSelect.value = desiredModel;
-  $("lm-api-mode").value = config.lm_studio_api_mode || "native";
-  $("web-parser-engine").value = config.web_parser_engine || "playwright";
-  $("web-parser-headless").checked = !!config.web_parser_headless;
-  $("web-parser-timeout").value = config.web_parser_timeout || 30;
-  $("parser-priority").value = (config.parser_priority || []).join(", ");
-  $("log-level").value = config.log_level || "INFO";
-}
-
-async function loadStatus() {
-  const payload = await api("/api/status");
-  renderMetrics(payload);
-}
-
-async function loadBotSettings() {
-  const data = await api("/api/bot-settings");
-  $("bot-token").placeholder = data.telegram_bot_token_masked || "не задан";
-  $("bot-token").value = "";
-  $("bot-telethon-api-id").value = "";
-  $("bot-telethon-api-id").placeholder = data.telethon_api_id_configured ? "задан" : "не задан";
-  $("bot-telethon-api-hash").value = "";
-  $("bot-telethon-api-hash").placeholder = data.telethon_api_hash_configured ? "задан" : "не задан";
-  $("bot-telethon-phone").value = data.telethon_phone || "";
-  $("bot-auto-parse").checked = !!data.auto_parse_enabled;
-  $("bot-interval").value = data.check_interval_seconds || 3600;
-  $("bot-parse-limit").value = data.auto_parse_limit || 200;
-  $("bot-parse-days").value = data.auto_parse_days || 7;
-  const status = data.telegram_bot_token_configured ? "Token задан" : "Token не задан";
-  const telethon = data.telethon_api_id_configured ? "Telethon настроен" : "Telethon не настроен";
-  $("bot-settings-status").textContent = `${status} · ${telethon} · Авто-парсинг: ${data.auto_parse_enabled ? "вкл" : "выкл"}`;
-}
-
-async function saveBotSettings() {
-  const payload = {};
-  const token = $("bot-token").value.trim();
-  if (token) payload.telegram_bot_token = token;
-  const apiId = $("bot-telethon-api-id").value.trim();
-  if (apiId) payload.telethon_api_id = apiId;
-  const apiHash = $("bot-telethon-api-hash").value.trim();
-  if (apiHash) payload.telethon_api_hash = apiHash;
-  payload.telethon_phone = $("bot-telethon-phone").value.trim();
-  payload.auto_parse_enabled = $("bot-auto-parse").checked;
-  payload.check_interval_seconds = Number($("bot-interval").value) || 3600;
-  payload.auto_parse_limit = Number($("bot-parse-limit").value) || 200;
-  payload.auto_parse_days = Number($("bot-parse-days").value) || 7;
-
-  await api("/api/bot-settings", { method: "POST", body: JSON.stringify(payload) });
-  toast("Настройки бота сохранены");
-  await loadBotSettings();
-  await loadStatus();
-}
-
-async function exportEnv() {
-  const data = await api("/api/env-export");
-  const box = $("env-export-box");
-  box.textContent = `# ${data.path}\n\n${data.content}`;
-  box.style.display = box.style.display === "none" ? "block" : "none";
-}
-
-async function syncEnv() {
-  const data = await api("/api/env-sync", { method: "POST", body: "{}" });
-  toast(`env синхронизирован: ${data.path}`);
-}
-
-async function saveSettings() {
-  const payload = {
-    lm_studio_base_url: $("lm-base-url").value.trim(),
-    lm_studio_model: $("lm-model").value,
-    lm_studio_api_mode: $("lm-api-mode").value,
-    lm_studio_api_token: $("lm-api-token").value.trim(),
-    web_parser_engine: $("web-parser-engine").value,
-    web_parser_headless: $("web-parser-headless").checked,
-    web_parser_timeout: Number($("web-parser-timeout").value) || 30,
-    parser_priority: parserPriorityList(),
-    log_level: $("log-level").value,
-  };
-  await api("/api/settings", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  $("lm-api-token").value = "";
-  $("lm-status").textContent = `Сохранено. Parser order: ${payload.parser_priority.join(", ")}`;
-  toast("Настройки сохранены");
-  await loadStatus();
-}
-
-function modelLabel(model) {
-  return model.display_name || model.key || model.id || "unknown";
-}
-
-function modelKey(model) {
-  return model.key || model.id || model.display_name;
-}
-
-function renderModels(models) {
-  state.models = models;
-  const select = $("lm-model");
-  const current = select.value;
-  const llms = models.filter((model) => (model.type || "llm") === "llm");
-  if (!llms.length) {
-    select.innerHTML = `<option value="">— нет моделей —</option>`;
-  } else {
-    select.innerHTML = llms
-      .map((model) => {
-        const key = modelKey(model);
-        const loaded = Array.isArray(model.loaded_instances) && model.loaded_instances.length > 0;
-        const meta = [model.params_string, model.quantization?.name].filter(Boolean).join(" ");
-        const suffix = [loaded ? "loaded" : "", meta].filter(Boolean).join(" · ");
-        const label = `${modelLabel(model)}${suffix ? ` — ${suffix}` : ""}`;
-        return `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`;
-      })
-      .join("");
-    if (current && llms.some((m) => modelKey(m) === current)) {
-      select.value = current;
-    }
+  if (text) {
+    filtered = filtered.filter((r) =>
+      (sourceTitle(r) + " " + (r.username || "") + " " + (r.source_type || ""))
+        .toLowerCase()
+        .includes(text),
+    );
   }
-
-  if (!models.length) {
-    $("models-list").innerHTML = `<div class="notice">Сервер вернул пустой список моделей.</div>`;
-    return;
-  }
-
-  $("models-list").innerHTML = models
-    .filter((model) => (model.type || "llm") === "llm")
-    .map((model) => {
-      const key = modelKey(model);
-      const loaded = Array.isArray(model.loaded_instances) && model.loaded_instances.length > 0;
-      const quant = model.quantization?.name || "";
-      const meta = [model.publisher, model.params_string, quant, model.max_context_length ? `ctx ${model.max_context_length}` : ""]
-        .filter(Boolean)
-        .join(" · ");
-      return `
-        <div class="item">
-          <div>
-            <div class="item-title">${escapeHtml(modelLabel(model))}</div>
-            <div class="item-meta">${escapeHtml(key)}${meta ? ` · ${escapeHtml(meta)}` : ""}</div>
-          </div>
-          <div class="item-actions">
-            <span class="tag ${loaded ? "loaded" : ""}">${loaded ? "loaded" : "not loaded"}</span>
-            <button type="button" data-model-select="${escapeHtml(key)}">Выбрать</button>
-            <button type="button" data-model-load="${escapeHtml(key)}">Load</button>
-          </div>
-        </div>
-      `;
-    })
-    .join("");
-}
-
-async function loadModels() {
-  const data = await api("/api/lm-studio/models");
-  renderModels(data.models || []);
-  $("lm-status").textContent = `Моделей: ${(data.models || []).length}`;
-}
-
-async function testLm() {
-  const data = await api("/api/lm-studio/test", { method: "POST", body: "{}" });
-  $("lm-status").textContent = `OK: models ${data.models_count}, loaded ${data.loaded_count}, selected ${data.selected_model || "-"}`;
-}
-
-async function selectModel(model) {
-  await api("/api/lm-studio/select", {
-    method: "POST",
-    body: JSON.stringify({ model }),
+  const dir = sourcesView.sortDir;
+  filtered.sort((a, b) => {
+    const k = sourcesView.sortKey;
+    const av = k === "total" ? (a.stats?.total || 0)
+            : k === "week" ? (a.stats?.week_count || 0)
+            : k === "latest" ? (a.stats?.latest_date || "")
+            : (a[k] || sourceTitle(a)).toString().toLowerCase();
+    const bv = k === "total" ? (b.stats?.total || 0)
+            : k === "week" ? (b.stats?.week_count || 0)
+            : k === "latest" ? (b.stats?.latest_date || "")
+            : (b[k] || sourceTitle(b)).toString().toLowerCase();
+    if (av < bv) return -1 * dir;
+    if (av > bv) return 1 * dir;
+    return 0;
   });
-  $("lm-model").value = model;
-  toast(`Выбрана модель ${model}`);
+  return filtered;
 }
 
-async function loadModel(model) {
-  const contextLength = Number($("lm-load-context").value || 0) || undefined;
-  await api("/api/lm-studio/load", {
-    method: "POST",
-    body: JSON.stringify({
-      model,
-      context_length: contextLength,
-      flash_attention: $("lm-flash-attention").checked,
-    }),
+function renderSourcesGroups(rows) {
+  const groups = new Map();
+  groups.set("all", rows.length);
+  rows.forEach((r) => {
+    const k = r.source_type || "other";
+    groups.set(k, (groups.get(k) || 0) + 1);
   });
-  $("lm-model").value = model;
-  toast(`Модель загружается/загружена: ${model}`);
-  await loadModels();
-}
-
-async function refreshTelegramStatus() {
-  const data = await api("/api/telegram/status");
-  if (!data.configured) {
-    $("tg-status").textContent = "Telethon API ID/hash пока не настроены.";
-    return;
-  }
-  const user = data.user ? `${data.user.first_name || ""} ${data.user.username ? `@${data.user.username}` : ""}`.trim() : "";
-  $("tg-status").textContent = `configured: ${data.configured}, connected: ${data.connected}, authorized: ${data.authorized}${user ? `, user: ${user}` : ""}`;
-}
-
-async function sendTelegramCode() {
-  const phone = $("tg-phone").value.trim();
-  if (!phone) throw new Error("Укажите телефон");
-  const data = await api("/api/telegram/send-code", {
-    method: "POST",
-    body: JSON.stringify({ phone }),
-  });
-  $("tg-status").textContent = `Код отправлен на ${data.phone}.`;
-  $("tg-code").focus();
-}
-
-async function signInTelegram() {
-  const payload = {
-    phone: $("tg-phone").value.trim(),
-    code: $("tg-code").value.trim(),
-    password: $("tg-password").value,
-  };
-  const data = await api("/api/telegram/sign-in", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  $("tg-status").textContent = data.password_required ? "Нужен 2FA password." : `authorized: ${data.authorized}`;
-}
-
-function renderTelegramChannels(channels) {
-  state.telegramChannels = channels;
-  $("tg-channels").innerHTML = channels
-    .map((channel, index) => `
-      <label class="item">
-        <input type="checkbox" data-tg-channel="${index}" />
-        <span>
-          <span class="item-title">${escapeHtml(channel.title)}</span>
-          <span class="item-meta">${escapeHtml(channel.username ? `@${channel.username}` : channel.id)}</span>
-        </span>
-        <span class="tag">${channel.broadcast ? "channel" : "group"}</span>
-      </label>
+  const labels = { all: "Все", rss: "RSS", telethon: "Telegram (user)", telegram_bot: "Bot API", web: "Web" };
+  $("sources-groups").innerHTML = Array.from(groups.entries())
+    .map(([key, count]) => `
+      <div class="item group-item ${key === sourcesView.group ? "active" : ""}" data-source-group="${escapeHtml(key)}">
+        <span>${escapeHtml(labels[key] || key)}</span>
+        <span class="tag">${count}</span>
+      </div>
     `)
     .join("");
 }
 
-async function loadTelegramChannels() {
-  const data = await api("/api/telegram/channels");
-  renderTelegramChannels(data.channels || []);
-  toast(`Каналов найдено: ${(data.channels || []).length}`);
-}
-
-async function addSelectedTelegramChannels() {
-  const checked = [...document.querySelectorAll("[data-tg-channel]:checked")];
-  const channels = checked.map((node) => state.telegramChannels[Number(node.dataset.tgChannel)]);
-  if (!channels.length) throw new Error("Выберите каналы");
-  await api("/api/telegram/channels", {
-    method: "POST",
-    body: JSON.stringify({ channels }),
-  });
-  toast(`Добавлено: ${channels.length}`);
-  await loadSources();
-}
-
-function sourceTitle(source) {
-  return source.title || source.username || source.channel_id;
-}
-
-function renderSources(sources) {
-  if (!sources.length) {
-    $("sources-list").innerHTML = `<div class="notice">Источники пока не добавлены.</div>`;
+function renderSourcesTable(rows) {
+  const filtered = applySourceFilters(rows);
+  $("sources-count").textContent = `Показано: ${filtered.length} / ${rows.length}`;
+  if (!filtered.length) {
+    $("sources-tbody").innerHTML = `<tr><td colspan="7"><div class="notice">Ничего не найдено.</div></td></tr>`;
     return;
   }
-
-  $("sources-list").innerHTML = sources
-    .map((source) => {
-      const stats = source.stats || {};
+  $("sources-tbody").innerHTML = filtered
+    .map((r) => {
+      const stats = r.stats || {};
+      const checked = sourcesView.selected.has(r.channel_id) ? "checked" : "";
       return `
-        <div class="item">
-          <div>
-            <div class="item-title">${escapeHtml(sourceTitle(source))}</div>
-            <div class="item-meta">${escapeHtml(source.source_type)} · ${escapeHtml(source.username || "")} · news ${stats.total ?? 0}</div>
-          </div>
-          <div class="item-actions">
-            <button type="button" data-source-parse="${source.channel_id}">Парсить</button>
-            <button type="button" data-source-remove="${source.channel_id}" class="danger">Удалить</button>
-          </div>
-        </div>
+        <tr>
+          <td><input type="checkbox" data-source-check="${r.channel_id}" ${checked} /></td>
+          <td>
+            <div class="item-title">${escapeHtml(sourceTitle(r))}</div>
+            <div class="item-meta">${escapeHtml(r.username || "")}</div>
+          </td>
+          <td><span class="tag">${escapeHtml(r.source_type || "—")}</span></td>
+          <td class="num">${stats.total ?? 0}</td>
+          <td class="num">${stats.week_count ?? 0}</td>
+          <td>${escapeHtml(fmtDate(stats.latest_date))}</td>
+          <td class="row-actions">
+            <button type="button" data-source-parse="${r.channel_id}">Парсить</button>
+            <button type="button" data-source-remove="${r.channel_id}" class="danger">Удалить</button>
+          </td>
+        </tr>
       `;
     })
     .join("");
 }
 
+function renderSources() {
+  const rows = store.get("sources") || [];
+  renderSourcesGroups(rows);
+  renderSourcesTable(rows);
+}
+
 async function loadSources() {
   const data = await api("/api/sources");
-  renderSources(data.sources || []);
+  store.set("sources", data.sources || []);
+  renderSources();
+}
+
+async function loadDefaults() {
+  if (store.get("defaults")) return;
+  const data = await api("/api/default-sources");
+  store.set("defaults", data);
+  const categories = data.categories || {};
+  const rows = [];
+  Object.entries(categories).forEach(([categoryId, category]) => {
+    rows.push(`<div class="item subhead"><b>${escapeHtml(category.name || categoryId)}</b><span class="tag">${(category.sources || []).length}</span></div>`);
+    (category.sources || []).forEach((source) => {
+      rows.push(`
+        <div class="item">
+          <span>
+            <div class="item-title">${escapeHtml(source.title)}</div>
+            <div class="item-meta">${escapeHtml(source.source_config?.rss_url || source.username)}</div>
+          </span>
+          <button type="button" data-default-source="${escapeHtml(categoryId)}::${escapeHtml(source.username)}">+ Добавить</button>
+        </div>
+      `);
+    });
+  });
+  $("default-sources").innerHTML = rows.join("");
+}
+
+async function addDefaultSource(categoryId, username) {
+  const category = store.get("defaults")?.categories?.[categoryId];
+  const source = (category?.sources || []).find((item) => item.username === username);
+  if (!source) throw new Error("Источник не найден");
+  await api("/api/sources/default", {
+    method: "POST",
+    body: JSON.stringify(source),
+  });
+  toast(`Добавлен: ${source.title}`);
+  await loadSources();
 }
 
 async function addManualSource() {
@@ -455,45 +424,6 @@ async function addManualSource() {
   await loadSources();
 }
 
-function renderDefaults(payload) {
-  state.defaults = payload;
-  const categories = payload.categories || {};
-  const rows = [];
-  Object.entries(categories).forEach(([categoryId, category]) => {
-    rows.push(`<div class="item"><div class="item-title">${escapeHtml(category.name || categoryId)}</div><span></span><span class="tag">${(category.sources || []).length}</span></div>`);
-    (category.sources || []).forEach((source) => {
-      rows.push(`
-        <div class="item">
-          <span></span>
-          <span>
-            <span class="item-title">${escapeHtml(source.title)}</span>
-            <span class="item-meta">${escapeHtml(source.source_config?.rss_url || source.username)}</span>
-          </span>
-          <button type="button" data-default-source="${escapeHtml(categoryId)}::${escapeHtml(source.username)}">Добавить</button>
-        </div>
-      `);
-    });
-  });
-  $("default-sources").innerHTML = rows.join("");
-}
-
-async function loadDefaults() {
-  const data = await api("/api/default-sources");
-  renderDefaults(data);
-}
-
-async function addDefaultSource(categoryId, username) {
-  const category = state.defaults?.categories?.[categoryId];
-  const source = (category?.sources || []).find((item) => item.username === username);
-  if (!source) throw new Error("Источник не найден");
-  await api("/api/sources/default", {
-    method: "POST",
-    body: JSON.stringify(source),
-  });
-  toast(`Добавлен источник ${source.title}`);
-  await loadSources();
-}
-
 async function parseSource(channelId) {
   const data = await api(`/api/sources/${channelId}/parse?limit=200&days=7`, {
     method: "POST",
@@ -504,97 +434,188 @@ async function parseSource(channelId) {
 }
 
 async function removeSource(channelId) {
+  if (!window.confirm("Удалить источник?")) return;
   await api(`/api/sources/${channelId}`, { method: "DELETE" });
-  toast("Источник удален");
+  sourcesView.selected.delete(Number(channelId));
+  toast("Источник удалён");
+  await loadSources();
+}
+
+async function bulkParseSources() {
+  const ids = Array.from(sourcesView.selected);
+  if (!ids.length) throw new Error("Выберите источники");
+  let parsed = 0;
+  for (const id of ids) {
+    try {
+      const data = await api(`/api/sources/${id}/parse?limit=200&days=7`, { method: "POST", body: "{}" });
+      parsed += data.stats?.parsed || 0;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  toast(`Парсинг завершён, новых: ${parsed}`);
+  await loadSources();
+}
+
+async function bulkDeleteSources() {
+  const ids = Array.from(sourcesView.selected);
+  if (!ids.length) throw new Error("Выберите источники");
+  if (!window.confirm(`Удалить ${ids.length} источников?`)) return;
+  for (const id of ids) {
+    try {
+      await api(`/api/sources/${id}`, { method: "DELETE" });
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  sourcesView.selected.clear();
+  toast(`Удалено: ${ids.length}`);
   await loadSources();
 }
 
 async function parseAll() {
-  const data = await api("/api/sources/parse-all?limit=100&days=3", {
-    method: "POST",
-    body: "{}",
-  });
+  const data = await api("/api/sources/parse-all?limit=100&days=3", { method: "POST", body: "{}" });
   toast(`Parsed ${data.totals.parsed}, skipped ${data.totals.skipped}, errors ${data.totals.errors}`);
-  await Promise.all([loadSources(), loadNews()]);
+  await loadSources();
 }
 
-function renderNews(rows) {
-  if (!rows.length) {
-    $("news-list").innerHTML = `<div class="notice">Новостей за период нет.</div>`;
+pageLoaders.sources = async () => {
+  await loadSources();
+  await loadDefaults();
+};
+
+// ---- Telegram account ------------------------------------------------------
+
+async function refreshTelegramStatus() {
+  const data = await api("/api/telegram/status");
+  store.set("telegramStatus", data);
+  if (!data.configured) {
+    $("tg-status").textContent = "Telethon API ID/hash пока не настроены — заполни на вкладке «Настройки».";
     return;
   }
+  const user = data.user ? `${data.user.first_name || ""} ${data.user.username ? `@${data.user.username}` : ""}`.trim() : "";
+  $("tg-status").textContent = `configured: ${data.configured} · connected: ${data.connected} · authorized: ${data.authorized}${user ? ` · user: ${user}` : ""}`;
+}
 
-  $("news-list").innerHTML = rows
-    .map((item) => `
-      <article class="news-card">
-        <div class="news-meta">${escapeHtml(item.date)} · ${escapeHtml(item.title || item.username || item.channel_id)}</div>
-        <div class="news-text">${escapeHtml(item.text)}</div>
-      </article>
-    `)
+async function sendTelegramCode() {
+  const phone = $("tg-phone").value.trim();
+  if (!phone) throw new Error("Укажите телефон");
+  await api("/api/telegram/send-code", { method: "POST", body: JSON.stringify({ phone }) });
+  toast("Код отправлен");
+  $("tg-code").focus();
+}
+
+async function signInTelegram() {
+  const payload = {
+    phone: $("tg-phone").value.trim(),
+    code: $("tg-code").value.trim(),
+    password: $("tg-password").value,
+  };
+  const data = await api("/api/telegram/sign-in", { method: "POST", body: JSON.stringify(payload) });
+  toast(data.password_required ? "Нужен 2FA password" : `authorized: ${data.authorized}`);
+  await refreshTelegramStatus();
+}
+
+const tgChannelsView = { filter: "" };
+
+function renderTelegramChannels() {
+  const channels = store.get("telegramChannels") || [];
+  const text = tgChannelsView.filter.toLowerCase().trim();
+  const filtered = text
+    ? channels.filter((c) => (c.title + " " + (c.username || "")).toLowerCase().includes(text))
+    : channels;
+
+  if (!channels.length) {
+    $("tg-channels").innerHTML = `<div class="notice">Нажми «Подгрузить», чтобы получить список диалогов.</div>`;
+    return;
+  }
+  if (!filtered.length) {
+    $("tg-channels").innerHTML = `<div class="notice">Ничего не найдено.</div>`;
+    return;
+  }
+  $("tg-channels").innerHTML = filtered
+    .map((channel, displayIdx) => {
+      const idx = channels.indexOf(channel);
+      return `
+        <label class="item">
+          <input type="checkbox" data-tg-channel="${idx}" />
+          <span>
+            <span class="item-title">${escapeHtml(channel.title)}</span>
+            <span class="item-meta">${escapeHtml(channel.username ? `@${channel.username}` : channel.id)}</span>
+          </span>
+          <span class="tag">${channel.broadcast ? "channel" : "group"}</span>
+        </label>
+      `;
+    })
     .join("");
 }
 
-async function loadNews() {
-  const days = Number($("news-days").value || 1);
-  const data = await api(`/api/news?days=${days}&limit=100`);
-  renderNews(data.news || []);
+async function loadTelegramChannels() {
+  const data = await api("/api/telegram/channels");
+  store.set("telegramChannels", data.channels || []);
+  renderTelegramChannels();
+  toast(`Каналов найдено: ${(data.channels || []).length}`);
 }
 
-async function summarizeNews() {
-  const days = Number($("news-days").value || 1);
-  const data = await api("/api/news/summary", {
-    method: "POST",
-    body: JSON.stringify({ days }),
-  });
-  $("summary-box").textContent = `Новостей: ${data.input_count}, после дедупликации: ${data.unique_count}\n\n${data.summary}`;
+async function addSelectedTelegramChannels() {
+  const checked = qsa("[data-tg-channel]:checked");
+  const channels = store.get("telegramChannels");
+  const picked = checked.map((node) => channels[Number(node.dataset.tgChannel)]);
+  if (!picked.length) throw new Error("Выберите каналы");
+  await api("/api/telegram/channels", { method: "POST", body: JSON.stringify({ channels: picked }) });
+  toast(`Добавлено: ${picked.length}`);
+  pageLoaded.delete("sources");
+  await refreshTelegramStatus();
 }
 
-// ---- Posting bots ----------------------------------------------------------
+pageLoaders.account = async () => {
+  await refreshTelegramStatus();
+  renderTelegramChannels();
+};
 
-function renderBots(bots) {
-  state.bots = bots;
+// ---- Bots ------------------------------------------------------------------
 
-  const select = $("post-bot");
-  if (!bots.length) {
-    select.innerHTML = `<option value="">— нет ботов —</option>`;
-  } else {
-    select.innerHTML = bots
-      .map((bot) => {
-        const label = `${bot.label} (${bot.kind}${bot.enabled ? "" : ", off"})`;
-        return `<option value="${bot.id}">${escapeHtml(label)}</option>`;
-      })
-      .join("");
-  }
+function renderBots() {
+  const bots = store.get("bots") || [];
+  const postSelect = $("post-bot");
+  postSelect.innerHTML = bots.length
+    ? bots.map((b) => `<option value="${b.id}">${escapeHtml(b.label)} (${escapeHtml(b.kind)}${b.enabled ? "" : ", off"})</option>`).join("")
+    : `<option value="">— нет ботов —</option>`;
 
   if (!bots.length) {
-    $("bots-list").innerHTML = `<div class="notice">Боты пока не добавлены.</div>`;
+    $("bots-list").innerHTML = `<div class="notice">Ботов пока нет.</div>`;
     return;
   }
-
   $("bots-list").innerHTML = bots
     .map((bot) => `
-      <div class="item">
-        <div>
-          <div class="item-title">${escapeHtml(bot.label)} <span class="tag">${escapeHtml(bot.kind)}</span></div>
-          <div class="item-meta">
-            chat: ${escapeHtml(bot.default_chat_id || "—")} · token: ${escapeHtml(bot.token_masked || "—")}
-            · ${bot.enabled ? "enabled" : "disabled"}
+      <article class="card">
+        <header class="card-head">
+          <div>
+            <div class="item-title">${escapeHtml(bot.label)}</div>
+            <div class="item-meta">${escapeHtml(bot.kind)} · ${bot.enabled ? "включён" : "выключен"}</div>
           </div>
+          <span class="tag ${bot.enabled ? "loaded" : ""}">${bot.kind}</span>
+        </header>
+        <div class="card-body">
+          <div class="item-meta">chat: ${escapeHtml(bot.default_chat_id || "—")}</div>
+          <div class="item-meta">token: ${escapeHtml(bot.token_masked || "—")}</div>
         </div>
-        <div class="item-actions">
-          <button type="button" data-bot-toggle="${bot.id}">${bot.enabled ? "Off" : "On"}</button>
-          <button type="button" data-bot-edit-token="${bot.id}">Token</button>
-          <button type="button" data-bot-edit-chat="${bot.id}">Chat</button>
+        <footer class="card-actions">
+          <button type="button" data-bot-toggle="${bot.id}">${bot.enabled ? "Выкл" : "Вкл"}</button>
+          <button type="button" data-bot-edit-token="${bot.id}">Токен</button>
+          <button type="button" data-bot-edit-chat="${bot.id}">Чат</button>
+          <button type="button" data-bot-edit-label="${bot.id}">Имя</button>
           <button type="button" data-bot-remove="${bot.id}" class="danger">Удалить</button>
-        </div>
-      </div>
+        </footer>
+      </article>
     `)
     .join("");
 }
 
 async function loadBots() {
   const data = await api("/api/posting/bots");
-  renderBots(data.bots || []);
+  store.set("bots", data.bots || []);
+  renderBots();
 }
 
 async function addBot() {
@@ -615,22 +636,20 @@ async function addBot() {
 }
 
 async function toggleBot(id) {
-  const bot = state.bots.find((b) => String(b.id) === String(id));
+  const bot = (store.get("bots") || []).find((b) => String(b.id) === String(id));
   if (!bot) return;
-  await api(`/api/posting/bots/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ enabled: !bot.enabled }),
-  });
+  await api(`/api/posting/bots/${id}`, { method: "PATCH", body: JSON.stringify({ enabled: !bot.enabled }) });
   await loadBots();
 }
 
-async function patchBotPrompt(id, field) {
-  const current = state.bots.find((b) => String(b.id) === String(id));
-  const initial = field === "token" ? "" : current?.default_chat_id || "";
-  const value = window.prompt(field === "token" ? "Новый токен:" : "Default chat id:", initial);
+async function patchBotField(id, field) {
+  const bot = (store.get("bots") || []).find((b) => String(b.id) === String(id));
+  if (!bot) return;
+  const labels = { token: "Новый токен:", default_chat_id: "Default chat:", label: "Название:" };
+  const initial = field === "token" ? "" : bot[field] || "";
+  const value = window.prompt(labels[field], initial);
   if (value === null) return;
-  const body = field === "token" ? { token: value } : { default_chat_id: value };
-  await api(`/api/posting/bots/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+  await api(`/api/posting/bots/${id}`, { method: "PATCH", body: JSON.stringify({ [field]: value }) });
   toast("Сохранено");
   await loadBots();
 }
@@ -638,32 +657,38 @@ async function patchBotPrompt(id, field) {
 async function removeBot(id) {
   if (!window.confirm("Удалить бота?")) return;
   await api(`/api/posting/bots/${id}`, { method: "DELETE" });
-  toast("Бот удалён");
+  toast("Удалён");
   await loadBots();
 }
 
+pageLoaders.bots = loadBots;
+
 // ---- Prompts ---------------------------------------------------------------
 
-function renderPrompts(prompts) {
-  state.prompts = prompts;
-  if (!prompts.length) {
-    $("prompts-list").innerHTML = `<div class="notice">Промпты пока не настроены.</div>`;
+let promptsViewTask = "repost";
+
+function renderPrompts() {
+  const all = store.get("prompts") || [];
+  const filtered = all.filter((p) => p.task === promptsViewTask);
+  qsa("[data-prompt-task]").forEach((el) => el.classList.toggle("active", el.dataset.promptTask === promptsViewTask));
+  if (!filtered.length) {
+    $("prompts-list").innerHTML = `<div class="notice">Промптов для задачи «${escapeHtml(promptsViewTask)}» нет.</div>`;
     return;
   }
-  $("prompts-list").innerHTML = prompts
+  $("prompts-list").innerHTML = filtered
     .map((p) => `
-      <div class="item">
+      <div class="item prompt-item">
         <div>
           <div class="item-title">
-            ${escapeHtml(p.task)} · ${escapeHtml(p.name)}
+            ${escapeHtml(p.name)}
             ${p.is_active ? '<span class="tag loaded">active</span>' : ""}
           </div>
-          <div class="item-meta">${escapeHtml((p.system_prompt || "").slice(0, 140))}…</div>
+          <div class="item-meta">${escapeHtml((p.system_prompt || "").slice(0, 200))}…</div>
         </div>
         <div class="item-actions">
           ${p.is_active ? "" : `<button type="button" data-prompt-activate="${p.id}">Активировать</button>`}
           <button type="button" data-prompt-edit="${p.id}">Редактировать</button>
-          <button type="button" data-prompt-remove="${p.id}" class="danger">Удалить</button>
+          <button type="button" data-prompt-remove="${p.id}" class="danger">×</button>
         </div>
       </div>
     `)
@@ -672,7 +697,8 @@ function renderPrompts(prompts) {
 
 async function loadPrompts() {
   const data = await api("/api/prompts");
-  renderPrompts(data.prompts || []);
+  store.set("prompts", data.prompts || []);
+  renderPrompts();
 }
 
 async function savePrompt() {
@@ -688,7 +714,27 @@ async function savePrompt() {
   }
   await api("/api/prompts", { method: "POST", body: JSON.stringify(payload) });
   toast("Промпт сохранён");
+  promptsViewTask = payload.task;
   await loadPrompts();
+}
+
+function editPromptInline(id) {
+  const p = (store.get("prompts") || []).find((x) => String(x.id) === String(id));
+  if (!p) return;
+  $("new-prompt-task").value = p.task;
+  $("new-prompt-name").value = p.name;
+  $("new-prompt-system").value = p.system_prompt;
+  $("new-prompt-user").value = p.user_template;
+  $("new-prompt-active").checked = !!p.is_active;
+  toast(`Редактируешь: ${p.task}/${p.name}`);
+  $("new-prompt-system").scrollIntoView({ behavior: "smooth" });
+}
+
+function clearPromptForm() {
+  $("new-prompt-name").value = "";
+  $("new-prompt-system").value = "";
+  $("new-prompt-user").value = "";
+  $("new-prompt-active").checked = false;
 }
 
 async function activatePrompt(id) {
@@ -697,37 +743,94 @@ async function activatePrompt(id) {
   await loadPrompts();
 }
 
-async function editPromptInline(id) {
-  const prompt = state.prompts.find((p) => String(p.id) === String(id));
-  if (!prompt) return;
-  $("new-prompt-task").value = prompt.task;
-  $("new-prompt-name").value = prompt.name;
-  $("new-prompt-system").value = prompt.system_prompt;
-  $("new-prompt-user").value = prompt.user_template;
-  $("new-prompt-active").checked = !!prompt.is_active;
-  toast(`Редактируешь: ${prompt.task}/${prompt.name}. Жми «Сохранить промпт».`);
-  $("new-prompt-system").focus();
-}
-
 async function removePrompt(id) {
   if (!window.confirm("Удалить промпт?")) return;
   await api(`/api/prompts/${id}`, { method: "DELETE" });
-  toast("Промпт удалён");
+  toast("Удалён");
   await loadPrompts();
 }
 
-// ---- Posting ---------------------------------------------------------------
+pageLoaders.prompts = loadPrompts;
+
+// ---- Pipelines (placeholder for stage B) ----------------------------------
+
+async function loadPipelines() {
+  try {
+    const data = await api("/api/pipelines");
+    store.set("pipelines", data.pipelines || []);
+    renderPipelines();
+  } catch (e) {
+    $("pipelines-list").innerHTML = `<div class="notice">Бэкенд пайплайнов появится на следующем этапе. ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderPipelines() {
+  const items = store.get("pipelines") || [];
+  if (!items.length) {
+    $("pipelines-list").innerHTML = `<div class="notice">Пайплайнов пока нет.</div>`;
+    return;
+  }
+  $("pipelines-list").innerHTML = items.map((p) => `<div class="item"><div class="item-title">${escapeHtml(p.name)}</div></div>`).join("");
+}
+
+pageLoaders.pipelines = loadPipelines;
+
+// ---- Runs (placeholder for stage B) ---------------------------------------
+
+async function loadRuns() {
+  try {
+    const data = await api("/api/runs");
+    store.set("runs", data.runs || []);
+    renderRuns();
+  } catch (e) {
+    $("runs-list").innerHTML = `<div class="notice">Запуски появятся вместе с пайплайнами. ${escapeHtml(e.message)}</div>`;
+  }
+}
+
+function renderRuns() {
+  const runs = store.get("runs") || [];
+  $("runs-list").innerHTML = runs.length
+    ? runs.map((r) => `<div class="item"><div class="item-title">#${r.id} · ${escapeHtml(r.status)}</div><div class="item-meta">${escapeHtml(fmtDate(r.started_at))}</div></div>`).join("")
+    : `<div class="notice">Запусков пока нет.</div>`;
+}
+
+pageLoaders.runs = loadRuns;
+
+// ---- News page -------------------------------------------------------------
+
+function renderNews(rows) {
+  $("news-list").innerHTML = rows.length
+    ? rows
+        .map((row) => `
+          <article class="news-card">
+            <div class="news-meta">${escapeHtml(fmtDate(row.date))} · ${escapeHtml(row.title || row.username || row.channel_id)}</div>
+            <div class="news-text">${escapeHtml(row.text)}</div>
+          </article>
+        `)
+        .join("")
+    : `<div class="notice">Новостей нет.</div>`;
+}
+
+async function loadNews() {
+  const days = Number($("news-days").value || 1);
+  const data = await api(`/api/news?days=${days}&limit=200`);
+  store.set("news", data.news || []);
+  renderNews(data.news || []);
+}
+
+async function summarizeNews() {
+  const days = Number($("news-days").value || 1);
+  const data = await api("/api/news/summary", { method: "POST", body: JSON.stringify({ days }) });
+  $("summary-box").textContent = `Новостей: ${data.input_count}, после дедупа: ${data.unique_count}\n\n${data.summary}`;
+}
 
 async function previewPost() {
   const payload = {
-    days: Number($("post-days").value || 1),
+    days: Number($("news-days").value || 1),
     instruction: $("post-instruction").value.trim() || undefined,
     prompt_name: $("post-style").value.trim() || undefined,
   };
-  const data = await api("/api/posting/preview", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  const data = await api("/api/posting/preview", { method: "POST", body: JSON.stringify(payload) });
   $("post-text").value = data.text || "";
   $("post-status").textContent = `Новостей: ${data.input_count}, после дедупа: ${data.unique_count}.`;
 }
@@ -744,103 +847,320 @@ async function sendPost() {
     parse_mode: $("post-parse-mode").value || undefined,
     disable_web_page_preview: true,
   };
-  const data = await api("/api/posting/send", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
+  const data = await api("/api/posting/send", { method: "POST", body: JSON.stringify(payload) });
   $("post-status").textContent = `Отправлено в ${data.chat_id} (бот #${data.bot_id}).`;
-  toast("Пост опубликован");
+  toast("Опубликовано");
 }
 
+pageLoaders.news = async () => {
+  await loadBots();
+  await loadNews();
+};
+
+// ---- Settings --------------------------------------------------------------
+
+function modelLabel(m) {
+  return m.display_name || m.key || m.id || "unknown";
+}
+function modelKey(m) {
+  return m.key || m.id || m.display_name;
+}
+
+function populateModelSelect() {
+  const select = $("lm-model");
+  const llms = (store.get("models") || []).filter((m) => (m.type || "llm") === "llm");
+  if (!llms.length) {
+    select.innerHTML = `<option value="">— нет моделей —</option>`;
+    return;
+  }
+  const current = select.value;
+  select.innerHTML = llms
+    .map((m) => {
+      const key = modelKey(m);
+      const loaded = Array.isArray(m.loaded_instances) && m.loaded_instances.length > 0;
+      const meta = [m.params_string, m.quantization?.name].filter(Boolean).join(" ");
+      const suffix = [loaded ? "loaded" : "", meta].filter(Boolean).join(" · ");
+      return `<option value="${escapeHtml(key)}">${escapeHtml(modelLabel(m))}${suffix ? ` — ${escapeHtml(suffix)}` : ""}</option>`;
+    })
+    .join("");
+  if (current && llms.some((m) => modelKey(m) === current)) {
+    select.value = current;
+  }
+}
+
+function renderModelsList() {
+  const models = store.get("models") || [];
+  if (!models.length) {
+    $("models-list").innerHTML = `<div class="notice">Сервер вернул пустой список.</div>`;
+    return;
+  }
+  $("models-list").innerHTML = models
+    .filter((m) => (m.type || "llm") === "llm")
+    .map((m) => {
+      const key = modelKey(m);
+      const loaded = Array.isArray(m.loaded_instances) && m.loaded_instances.length > 0;
+      const meta = [m.publisher, m.params_string, m.quantization?.name].filter(Boolean).join(" · ");
+      return `
+        <div class="item">
+          <span>
+            <div class="item-title">${escapeHtml(modelLabel(m))}</div>
+            <div class="item-meta">${escapeHtml(key)}${meta ? ` · ${escapeHtml(meta)}` : ""}</div>
+          </span>
+          <div class="item-actions">
+            <span class="tag ${loaded ? "loaded" : ""}">${loaded ? "loaded" : "idle"}</span>
+            <button type="button" data-model-select="${escapeHtml(key)}">Выбрать</button>
+            <button type="button" data-model-load="${escapeHtml(key)}">Load</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
+}
+
+async function loadModels() {
+  const data = await api("/api/lm-studio/models");
+  store.set("models", data.models || []);
+  populateModelSelect();
+  renderModelsList();
+  $("lm-status").textContent = `Моделей: ${(data.models || []).length}`;
+}
+
+async function selectModel(model) {
+  await api("/api/lm-studio/select", { method: "POST", body: JSON.stringify({ model }) });
+  $("lm-model").value = model;
+  toast(`Выбрана: ${model}`);
+}
+
+async function loadModel(model) {
+  const contextLength = Number($("lm-load-context").value || 0) || undefined;
+  await api("/api/lm-studio/load", {
+    method: "POST",
+    body: JSON.stringify({ model, context_length: contextLength, flash_attention: $("lm-flash-attention").checked }),
+  });
+  $("lm-model").value = model;
+  toast(`Загружается: ${model}`);
+  await loadModels();
+}
+
+async function testLm() {
+  const data = await api("/api/lm-studio/test", { method: "POST", body: "{}" });
+  $("lm-status").textContent = `OK · моделей ${data.models_count}, загружено ${data.loaded_count}, активная: ${data.selected_model || "—"}`;
+}
+
+async function loadStatus() {
+  const status = await api("/api/status");
+  store.set("status", status);
+  const config = status.config || {};
+  $("lm-base-url").value = config.lm_studio_base_url || "";
+  const select = $("lm-model");
+  const desired = config.lm_studio_model || "";
+  if (desired && !Array.from(select.options).some((o) => o.value === desired)) {
+    const opt = document.createElement("option");
+    opt.value = desired;
+    opt.textContent = desired;
+    select.appendChild(opt);
+  }
+  select.value = desired;
+  $("lm-api-mode").value = config.lm_studio_api_mode || "native";
+  $("web-parser-engine").value = config.web_parser_engine || "playwright";
+  $("web-parser-headless").checked = !!config.web_parser_headless;
+  $("web-parser-timeout").value = config.web_parser_timeout || 30;
+  $("parser-priority").value = (config.parser_priority || []).join(", ");
+  $("log-level").value = config.log_level || "INFO";
+}
+
+async function loadBotSettings() {
+  const data = await api("/api/bot-settings");
+  $("bot-token").placeholder = data.telegram_bot_token_masked || "пусто";
+  $("bot-telethon-api-id").placeholder = data.telethon_api_id_configured ? "(уже задан)" : "12345678";
+  $("bot-telethon-api-hash").placeholder = data.telethon_api_hash_configured ? "(уже задан)" : "";
+  $("bot-telethon-phone").value = data.telethon_phone || "";
+  $("bot-auto-parse").checked = !!data.auto_parse_enabled;
+  $("bot-interval").value = data.check_interval_seconds || "";
+  $("bot-parse-limit").value = data.auto_parse_limit || "";
+  $("bot-parse-days").value = data.auto_parse_days || "";
+}
+
+async function saveSettings() {
+  const parser_priority = $("parser-priority").value.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({
+      lm_studio_base_url: $("lm-base-url").value.trim(),
+      lm_studio_model: $("lm-model").value,
+      lm_studio_api_mode: $("lm-api-mode").value,
+      lm_studio_api_token: $("lm-api-token").value.trim() || undefined,
+      web_parser_engine: $("web-parser-engine").value,
+      web_parser_headless: $("web-parser-headless").checked,
+      web_parser_timeout: Number($("web-parser-timeout").value) || 30,
+      parser_priority,
+      log_level: $("log-level").value,
+    }),
+  });
+  $("lm-api-token").value = "";
+  toast("Настройки сохранены");
+  await loadStatus();
+}
+
+async function saveBotSettings() {
+  const payload = {};
+  const set = (key, value) => { if (value !== "" && value !== undefined && value !== null) payload[key] = value; };
+  set("telegram_bot_token", $("bot-token").value.trim());
+  set("telethon_api_id", $("bot-telethon-api-id").value.trim());
+  set("telethon_api_hash", $("bot-telethon-api-hash").value.trim());
+  set("telethon_phone", $("bot-telethon-phone").value.trim());
+  payload.auto_parse_enabled = $("bot-auto-parse").checked;
+  set("check_interval_seconds", Number($("bot-interval").value) || undefined);
+  set("auto_parse_limit", Number($("bot-parse-limit").value) || undefined);
+  set("auto_parse_days", Number($("bot-parse-days").value) || undefined);
+  await api("/api/bot-settings", { method: "POST", body: JSON.stringify(payload) });
+  toast("Настройки бота сохранены");
+  await loadBotSettings();
+}
+
+async function exportEnv() {
+  const data = await api("/api/env-export");
+  const box = $("env-export-box");
+  box.textContent = `# ${data.path}\n\n${data.content}`;
+  box.hidden = !box.hidden;
+}
+
+async function syncEnv() {
+  const data = await api("/api/env-sync", { method: "POST", body: "{}" });
+  toast(`env синхронизирован: ${data.path}`);
+}
+
+pageLoaders.settings = async () => {
+  await loadStatus();
+  await loadBotSettings();
+  await loadModels().catch(() => {});
+};
+
+// ---- Wiring ----------------------------------------------------------------
+
 function wireEvents() {
-  $("setup-btn").addEventListener("click", (e) => withBusy(e.target, setupAdmin).catch((err) => toast(err.message)));
-  $("login-btn").addEventListener("click", (e) => withBusy(e.target, login).catch((err) => toast(err.message)));
-  $("logout-btn").addEventListener("click", (e) => withBusy(e.target, logout).catch((err) => toast(err.message)));
-  $("refresh-btn").addEventListener("click", () => runAll());
-  $("bot-settings-refresh-btn").addEventListener("click", () => loadBotSettings().catch((err) => toast(err.message)));
-  $("bot-settings-save-btn").addEventListener("click", (e) => withBusy(e.target, saveBotSettings).catch((err) => toast(err.message)));
-  $("bot-env-export-btn").addEventListener("click", (e) => withBusy(e.target, exportEnv).catch((err) => toast(err.message)));
-  $("env-sync-btn").addEventListener("click", (e) => withBusy(e.target, syncEnv).catch((err) => toast(err.message)));
-  $("settings-save-btn").addEventListener("click", (e) => withBusy(e.target, saveSettings).catch((err) => toast(err.message)));
-  $("models-load-btn").addEventListener("click", (e) => withBusy(e.target, loadModels).catch((err) => toast(err.message)));
+  $("setup-btn").addEventListener("click", (e) => withBusy(e.target, setupAdmin).catch(() => {}));
+  $("login-btn").addEventListener("click", (e) => withBusy(e.target, login).catch(() => {}));
+  $("logout-btn").addEventListener("click", (e) => withBusy(e.target, logout).catch(() => {}));
+
+  // Dashboard
+  $("dashboard-refresh-btn").addEventListener("click", () => reloadPage("dashboard"));
+
+  // Sources
+  $("sources-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadSources).catch(() => {}));
+  $("sources-search").addEventListener("input", debounce((e) => { sourcesView.filter = e.target.value; renderSources(); }, 200));
+  $("sources-add-toggle-btn").addEventListener("click", () => { $("sources-add-panel").hidden = !$("sources-add-panel").hidden; });
+  $("sources-catalog-toggle-btn").addEventListener("click", () => { $("sources-catalog-panel").hidden = !$("sources-catalog-panel").hidden; });
+  $("manual-add-btn").addEventListener("click", (e) => withBusy(e.target, addManualSource).catch(() => {}));
+  $("sources-check-all").addEventListener("change", (e) => {
+    const checked = e.target.checked;
+    qsa("[data-source-check]").forEach((cb) => { cb.checked = checked; });
+    if (checked) {
+      (store.get("sources") || []).forEach((s) => sourcesView.selected.add(s.channel_id));
+    } else {
+      sourcesView.selected.clear();
+    }
+  });
+  $("sources-bulk-parse-btn").addEventListener("click", (e) => withBusy(e.target, bulkParseSources).catch(() => {}));
+  $("sources-bulk-delete-btn").addEventListener("click", (e) => withBusy(e.target, bulkDeleteSources).catch(() => {}));
+  $("sources-tbody").addEventListener("change", (e) => {
+    const target = e.target;
+    if (target.matches("[data-source-check]")) {
+      const id = Number(target.dataset.sourceCheck);
+      if (target.checked) sourcesView.selected.add(id);
+      else sourcesView.selected.delete(id);
+    }
+  });
+  qsa("th[data-sort]", $("sources-tbody")?.parentElement).forEach((th) => {
+    th.addEventListener("click", () => {
+      const key = th.dataset.sort;
+      if (sourcesView.sortKey === key) sourcesView.sortDir = -sourcesView.sortDir;
+      else { sourcesView.sortKey = key; sourcesView.sortDir = 1; }
+      renderSources();
+    });
+  });
+
+  // Account
+  $("tg-status-btn").addEventListener("click", (e) => withBusy(e.target, refreshTelegramStatus).catch(() => {}));
+  $("tg-code-btn").addEventListener("click", (e) => withBusy(e.target, sendTelegramCode).catch(() => {}));
+  $("tg-login-btn").addEventListener("click", (e) => withBusy(e.target, signInTelegram).catch(() => {}));
+  $("tg-channels-btn").addEventListener("click", (e) => withBusy(e.target, loadTelegramChannels).catch(() => {}));
+  $("tg-add-selected-btn").addEventListener("click", (e) => withBusy(e.target, addSelectedTelegramChannels).catch(() => {}));
+  $("tg-channels-search").addEventListener("input", debounce((e) => { tgChannelsView.filter = e.target.value; renderTelegramChannels(); }, 200));
+
+  // Bots
+  $("bots-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadBots).catch(() => {}));
+  $("new-bot-add-btn").addEventListener("click", (e) => withBusy(e.target, addBot).catch(() => {}));
+
+  // Prompts
+  $("prompts-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadPrompts).catch(() => {}));
+  $("new-prompt-save-btn").addEventListener("click", (e) => withBusy(e.target, savePrompt).catch(() => {}));
+  $("new-prompt-clear-btn").addEventListener("click", clearPromptForm);
+  $("prompts-tasks").addEventListener("click", (e) => {
+    const task = e.target?.dataset?.promptTask;
+    if (!task) return;
+    promptsViewTask = task;
+    $("new-prompt-task").value = task;
+    renderPrompts();
+  });
+
+  // Pipelines / Runs (placeholders)
+  $("pipelines-refresh-btn").addEventListener("click", () => reloadPage("pipelines"));
+  $("runs-refresh-btn").addEventListener("click", () => reloadPage("runs"));
+
+  // News
+  $("news-load-btn").addEventListener("click", (e) => withBusy(e.target, loadNews).catch(() => {}));
+  $("summary-btn").addEventListener("click", (e) => withBusy(e.target, summarizeNews).catch(() => {}));
+  $("post-preview-btn").addEventListener("click", (e) => withBusy(e.target, previewPost).catch(() => {}));
+  $("post-send-btn").addEventListener("click", (e) => withBusy(e.target, sendPost).catch(() => {}));
+  $("parse-all-btn").addEventListener("click", (e) => withBusy(e.target, parseAll).catch(() => {}));
+
+  // Settings
+  $("settings-refresh-btn").addEventListener("click", () => reloadPage("settings"));
+  $("settings-save-btn").addEventListener("click", (e) => withBusy(e.target, saveSettings).catch(() => {}));
+  $("bot-settings-save-btn").addEventListener("click", (e) => withBusy(e.target, saveBotSettings).catch(() => {}));
+  $("bot-env-export-btn").addEventListener("click", (e) => withBusy(e.target, exportEnv).catch(() => {}));
+  $("env-sync-btn").addEventListener("click", (e) => withBusy(e.target, syncEnv).catch(() => {}));
+  $("models-load-btn").addEventListener("click", (e) => withBusy(e.target, loadModels).catch(() => {}));
   $("selected-model-load-btn").addEventListener("click", (e) => withBusy(e.target, async () => {
     const model = $("lm-model").value;
     if (!model) throw new Error("Выберите модель");
     await loadModel(model);
-  }).catch((err) => toast(err.message)));
+  }).catch(() => {}));
   $("lm-model").addEventListener("change", (e) => {
     const model = e.target.value;
     if (model) selectModel(model).catch((err) => toast(err.message));
   });
-  $("bots-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadBots).catch((err) => toast(err.message)));
-  $("new-bot-add-btn").addEventListener("click", (e) => withBusy(e.target, addBot).catch((err) => toast(err.message)));
-  $("prompts-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadPrompts).catch((err) => toast(err.message)));
-  $("new-prompt-save-btn").addEventListener("click", (e) => withBusy(e.target, savePrompt).catch((err) => toast(err.message)));
-  $("post-preview-btn").addEventListener("click", (e) => withBusy(e.target, previewPost).catch((err) => toast(err.message)));
-  $("post-send-btn").addEventListener("click", (e) => withBusy(e.target, sendPost).catch((err) => toast(err.message)));
-  $("lm-test-btn").addEventListener("click", (e) => withBusy(e.target, testLm).catch((err) => toast(err.message)));
-  $("tg-status-btn").addEventListener("click", (e) => withBusy(e.target, refreshTelegramStatus).catch((err) => toast(err.message)));
-  $("tg-code-btn").addEventListener("click", (e) => withBusy(e.target, sendTelegramCode).catch((err) => toast(err.message)));
-  $("tg-login-btn").addEventListener("click", (e) => withBusy(e.target, signInTelegram).catch((err) => toast(err.message)));
-  $("tg-channels-btn").addEventListener("click", (e) => withBusy(e.target, loadTelegramChannels).catch((err) => toast(err.message)));
-  $("tg-add-selected-btn").addEventListener("click", (e) => withBusy(e.target, addSelectedTelegramChannels).catch((err) => toast(err.message)));
-  $("sources-refresh-btn").addEventListener("click", () => loadSources().catch((err) => toast(err.message)));
-  $("manual-add-btn").addEventListener("click", (e) => withBusy(e.target, addManualSource).catch((err) => toast(err.message)));
-  $("defaults-refresh-btn").addEventListener("click", () => loadDefaults().catch((err) => toast(err.message)));
-  $("parse-all-btn").addEventListener("click", (e) => withBusy(e.target, parseAll).catch((err) => toast(err.message)));
-  $("news-load-btn").addEventListener("click", () => loadNews().catch((err) => toast(err.message)));
-  $("summary-btn").addEventListener("click", (e) => withBusy(e.target, summarizeNews).catch((err) => toast(err.message)));
+  $("lm-test-btn").addEventListener("click", (e) => withBusy(e.target, testLm).catch(() => {}));
 
+  // Delegated clicks for dynamic content
   document.body.addEventListener("click", (event) => {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
 
-    const modelSelect = target.dataset.modelSelect;
-    const modelLoad = target.dataset.modelLoad;
-    const sourceParse = target.dataset.sourceParse;
-    const sourceRemove = target.dataset.sourceRemove;
-    const defaultSource = target.dataset.defaultSource;
-
-    if (modelSelect) selectModel(modelSelect).catch((err) => toast(err.message));
-    if (modelLoad) loadModel(modelLoad).catch((err) => toast(err.message));
-    if (sourceParse) parseSource(sourceParse).catch((err) => toast(err.message));
-    if (sourceRemove) removeSource(sourceRemove).catch((err) => toast(err.message));
-    if (defaultSource) {
-      const [categoryId, username] = defaultSource.split("::");
-      addDefaultSource(categoryId, username).catch((err) => toast(err.message));
-    }
-
-    const botToggle = target.dataset.botToggle;
-    const botEditToken = target.dataset.botEditToken;
-    const botEditChat = target.dataset.botEditChat;
-    const botRemove = target.dataset.botRemove;
-    const promptActivate = target.dataset.promptActivate;
-    const promptEdit = target.dataset.promptEdit;
-    const promptRemove = target.dataset.promptRemove;
-
-    if (botToggle) toggleBot(botToggle).catch((err) => toast(err.message));
-    if (botEditToken) patchBotPrompt(botEditToken, "token").catch((err) => toast(err.message));
-    if (botEditChat) patchBotPrompt(botEditChat, "chat").catch((err) => toast(err.message));
-    if (botRemove) removeBot(botRemove).catch((err) => toast(err.message));
-    if (promptActivate) activatePrompt(promptActivate).catch((err) => toast(err.message));
-    if (promptEdit) editPromptInline(promptEdit).catch((err) => toast(err.message));
-    if (promptRemove) removePrompt(promptRemove).catch((err) => toast(err.message));
+    const d = target.dataset;
+    if (d.sourceParse) parseSource(d.sourceParse).catch((err) => toast(err.message));
+    else if (d.sourceRemove) removeSource(d.sourceRemove).catch((err) => toast(err.message));
+    else if (d.sourceGroup) { sourcesView.group = d.sourceGroup; renderSources(); }
+    else if (d.defaultSource) {
+      const [c, u] = d.defaultSource.split("::");
+      addDefaultSource(c, u).catch((err) => toast(err.message));
+    } else if (d.botToggle) toggleBot(d.botToggle).catch((err) => toast(err.message));
+    else if (d.botEditToken) patchBotField(d.botEditToken, "token").catch((err) => toast(err.message));
+    else if (d.botEditChat) patchBotField(d.botEditChat, "default_chat_id").catch((err) => toast(err.message));
+    else if (d.botEditLabel) patchBotField(d.botEditLabel, "label").catch((err) => toast(err.message));
+    else if (d.botRemove) removeBot(d.botRemove).catch((err) => toast(err.message));
+    else if (d.promptActivate) activatePrompt(d.promptActivate).catch((err) => toast(err.message));
+    else if (d.promptEdit) editPromptInline(d.promptEdit);
+    else if (d.promptRemove) removePrompt(d.promptRemove).catch((err) => toast(err.message));
+    else if (d.modelSelect) selectModel(d.modelSelect).catch((err) => toast(err.message));
+    else if (d.modelLoad) loadModel(d.modelLoad).catch((err) => toast(err.message));
   });
 }
 
-async function runAll() {
-  await Promise.allSettled([
-    loadStatus(),
-    loadBotSettings(),
-    refreshTelegramStatus(),
-    loadSources(),
-    loadDefaults(),
-    loadNews(),
-    loadModels().catch(() => {}),
-    loadBots(),
-    loadPrompts(),
-  ]);
-}
+// ---- Bootstrap -------------------------------------------------------------
 
-wireEvents();
-loadAuthState().catch((err) => toast(err.message));
+(async () => {
+  wireEvents();
+  await loadAuthState();
+})();

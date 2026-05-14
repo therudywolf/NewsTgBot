@@ -49,354 +49,524 @@
 
     <div id="app-shell" hidden>
       <header class="topbar">
-        <div>
+        <div class="brand">
           <div class="auth-kicker">NewsTgBot Admin</div>
           <h1>NewsTgBot</h1>
-          <p id="status-line">Загрузка статуса</p>
         </div>
+        <nav class="tabs" role="tablist">
+          <a class="tab" data-tab="dashboard" href="#dashboard">Дашборд</a>
+          <a class="tab" data-tab="sources" href="#sources">Источники</a>
+          <a class="tab" data-tab="account" href="#account">TG-аккаунт</a>
+          <a class="tab" data-tab="bots" href="#bots">Боты</a>
+          <a class="tab" data-tab="prompts" href="#prompts">Промпты</a>
+          <a class="tab" data-tab="pipelines" href="#pipelines">Пайплайны</a>
+          <a class="tab" data-tab="runs" href="#runs">Запуски</a>
+          <a class="tab" data-tab="news" href="#news">Новости</a>
+          <a class="tab" data-tab="settings" href="#settings">Настройки</a>
+        </nav>
         <div class="topbar-actions">
           <span id="admin-badge" class="tag loaded"></span>
-          <button id="refresh-btn" type="button">Обновить</button>
-          <button id="parse-all-btn" type="button">Парсить все</button>
           <button id="logout-btn" type="button">Выйти</button>
         </div>
       </header>
 
-      <main class="layout">
-        <section class="panel span-2" aria-labelledby="status-title">
-          <div class="panel-head">
-            <h2 id="status-title">Состояние</h2>
+      <main class="page-container">
+        <!-- ============================= DASHBOARD ============================= -->
+        <section class="page" data-page="dashboard" hidden>
+          <div class="page-head">
+            <h2>Состояние</h2>
+            <button id="dashboard-refresh-btn" type="button">Обновить</button>
           </div>
           <div class="metrics" id="metrics"></div>
+          <div class="panel-row">
+            <section class="panel">
+              <div class="panel-head"><h3>Последние запуски</h3></div>
+              <div id="dashboard-runs" class="list compact"></div>
+            </section>
+            <section class="panel">
+              <div class="panel-head"><h3>Свежие новости</h3></div>
+              <div id="dashboard-news" class="list compact"></div>
+            </section>
+          </div>
         </section>
 
-        <section class="panel" aria-labelledby="bot-settings-title">
-          <div class="panel-head">
-            <h2 id="bot-settings-title">Настройки бота</h2>
-            <button id="bot-settings-refresh-btn" type="button">Обновить</button>
+        <!-- ============================= SOURCES ============================= -->
+        <section class="page" data-page="sources" hidden>
+          <div class="page-head">
+            <h2>Источники</h2>
+            <div class="inline-controls">
+              <input id="sources-search" type="search" placeholder="Поиск по названию…" />
+              <button id="sources-refresh-btn" type="button">Обновить</button>
+              <button id="sources-add-toggle-btn" type="button">+ Добавить</button>
+              <button id="sources-catalog-toggle-btn" type="button">Каталог RSS</button>
+            </div>
           </div>
-          <div id="bot-settings-status" class="notice"></div>
-          <div class="form-grid">
-            <label>
-              Bot API Token
-              <input id="bot-token" type="password" autocomplete="off" placeholder="123456:ABC-DEF..." />
-            </label>
-            <label>
-              Telethon API ID
-              <input id="bot-telethon-api-id" autocomplete="off" placeholder="12345678" />
-            </label>
-            <label>
-              Telethon API Hash
-              <input id="bot-telethon-api-hash" type="password" autocomplete="off" placeholder="0123456789abcdef..." />
-            </label>
-            <label>
-              Telethon Phone
-              <input id="bot-telethon-phone" autocomplete="tel" placeholder="+79990000000" />
-            </label>
-            <label class="check-label">
-              <input id="bot-auto-parse" type="checkbox" />
-              Авто-парсинг
-            </label>
-            <label>
-              Интервал (сек)
-              <input id="bot-interval" type="number" min="60" step="60" placeholder="3600" />
-            </label>
-            <label>
-              Лимит сообщений
-              <input id="bot-parse-limit" type="number" min="1" placeholder="200" />
-            </label>
-            <label>
-              Глубина (дней)
-              <input id="bot-parse-days" type="number" min="1" placeholder="7" />
-            </label>
+
+          <div class="split-2col">
+            <aside class="panel sources-tree">
+              <div class="panel-head">
+                <h3>Группы</h3>
+              </div>
+              <div id="sources-groups" class="list compact"></div>
+            </aside>
+
+            <section class="panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Список источников</h3>
+                  <span id="sources-count" class="item-meta"></span>
+                </div>
+                <div class="inline-controls">
+                  <button id="sources-bulk-parse-btn" type="button">Парсить выбранные</button>
+                  <button id="sources-bulk-delete-btn" type="button" class="danger">Удалить</button>
+                </div>
+              </div>
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th><input id="sources-check-all" type="checkbox" /></th>
+                    <th data-sort="title">Название</th>
+                    <th data-sort="source_type">Тип</th>
+                    <th data-sort="total" class="num">Всего</th>
+                    <th data-sort="week" class="num">7д</th>
+                    <th data-sort="latest">Последняя</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="sources-tbody"></tbody>
+              </table>
+            </section>
           </div>
-          <div class="button-row">
-            <button id="bot-settings-save-btn" type="button">Сохранить</button>
-            <button id="bot-env-export-btn" type="button">Показать env</button>
-            <button id="env-sync-btn" type="button">Синхронизировать env</button>
-          </div>
-          <pre id="env-export-box" class="summary" style="display:none;font-size:12px;overflow-x:auto"></pre>
+
+          <section class="panel" id="sources-add-panel" hidden>
+            <div class="panel-head"><h3>Добавить вручную</h3></div>
+            <div class="form-grid">
+              <label>
+                Источник (URL или @канал)
+                <input id="manual-source" placeholder="https://example.com/rss или @habr" />
+              </label>
+              <label>
+                Название
+                <input id="manual-title" placeholder="опционально" />
+              </label>
+              <label>
+                Тип
+                <select id="manual-type">
+                  <option value="rss">RSS</option>
+                  <option value="telethon">Telegram (user account)</option>
+                  <option value="web">Web (Playwright)</option>
+                  <option value="telegram_bot">Telegram Bot API</option>
+                </select>
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="manual-add-btn" type="button">Добавить</button>
+            </div>
+          </section>
+
+          <section class="panel" id="sources-catalog-panel" hidden>
+            <div class="panel-head"><h3>Каталог открытых RSS</h3></div>
+            <div id="default-sources" class="list compact"></div>
+          </section>
         </section>
 
-        <section class="panel" aria-labelledby="lm-title">
-          <div class="panel-head">
-            <h2 id="lm-title">LM Studio и парсеры</h2>
-            <button id="lm-test-btn" type="button">Проверить</button>
-          </div>
-          <div class="form-grid">
-            <label>
-              Base URL
-              <input id="lm-base-url" autocomplete="off" placeholder="http://localhost:1234" />
-            </label>
-            <label>
-              API mode
-              <select id="lm-api-mode">
-                <option value="native">native /api/v1</option>
-                <option value="openai">OpenAI-compatible /v1</option>
-              </select>
-            </label>
-            <label>
-              API token
-              <input id="lm-api-token" type="password" autocomplete="off" placeholder="optional bearer token" />
-            </label>
-            <label>
-              Selected model
-              <select id="lm-model"><option value="">— загрузите модели —</option></select>
-            </label>
-            <label>
-              Load context
-              <input id="lm-load-context" type="number" min="1024" step="1024" placeholder="8192" />
-            </label>
-            <label class="check-label">
-              <input id="lm-flash-attention" type="checkbox" checked />
-              Flash attention
-            </label>
-            <label>
-              Web parser engine
-              <select id="web-parser-engine">
-                <option value="playwright">Playwright</option>
-                <option value="selenium">Selenium</option>
-              </select>
-            </label>
-            <label class="check-label">
-              <input id="web-parser-headless" type="checkbox" checked />
-              Headless browser
-            </label>
-            <label>
-              Web parser timeout
-              <input id="web-parser-timeout" type="number" min="1" placeholder="30" />
-            </label>
-            <label>
-              Parser priority
-              <input id="parser-priority" autocomplete="off" placeholder="telethon, rss, web" />
-            </label>
-            <label>
-              Log level
-              <select id="log-level">
-                <option value="DEBUG">DEBUG</option>
-                <option value="INFO">INFO</option>
-                <option value="WARNING">WARNING</option>
-                <option value="ERROR">ERROR</option>
-                <option value="CRITICAL">CRITICAL</option>
-              </select>
-            </label>
-          </div>
-          <div class="button-row">
-            <button id="settings-save-btn" type="button">Сохранить</button>
-            <button id="models-load-btn" type="button">Получить модели</button>
-            <button id="selected-model-load-btn" type="button">Load selected</button>
-          </div>
-          <div id="lm-status" class="notice"></div>
-          <div id="models-list" class="list"></div>
-        </section>
-
-        <section class="panel" aria-labelledby="telegram-title">
-          <div class="panel-head">
-            <h2 id="telegram-title">Telegram аккаунт</h2>
-            <button id="tg-status-btn" type="button">Статус</button>
+        <!-- ============================= TG ACCOUNT ============================= -->
+        <section class="page" data-page="account" hidden>
+          <div class="page-head">
+            <h2>Telegram аккаунт</h2>
+            <button id="tg-status-btn" type="button">Обновить статус</button>
           </div>
           <div id="tg-status" class="notice"></div>
-          <div class="form-grid">
-            <label>
-              Phone
-              <input id="tg-phone" autocomplete="tel" placeholder="+79990000000" />
-            </label>
-            <label>
-              Code
-              <input id="tg-code" autocomplete="one-time-code" placeholder="12345" />
-            </label>
-            <label>
-              2FA password
-              <input id="tg-password" type="password" autocomplete="current-password" />
-            </label>
-          </div>
-          <div class="button-row">
-            <button id="tg-code-btn" type="button">Отправить код</button>
-            <button id="tg-login-btn" type="button">Войти</button>
-            <button id="tg-channels-btn" type="button">Список каналов</button>
-            <button id="tg-add-selected-btn" type="button">Добавить выбранные</button>
-          </div>
-          <div id="tg-channels" class="list compact"></div>
+
+          <section class="panel">
+            <div class="panel-head"><h3>Авторизация (Telethon)</h3></div>
+            <div class="form-grid">
+              <label>
+                Телефон
+                <input id="tg-phone" autocomplete="tel" placeholder="+79990000000" />
+              </label>
+              <label>
+                Код
+                <input id="tg-code" autocomplete="one-time-code" placeholder="12345" />
+              </label>
+              <label>
+                2FA password
+                <input id="tg-password" type="password" autocomplete="current-password" />
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="tg-code-btn" type="button">Отправить код</button>
+              <button id="tg-login-btn" type="button">Войти</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Каналы и диалоги</h3>
+              <div class="inline-controls">
+                <input id="tg-channels-search" type="search" placeholder="Поиск…" />
+                <button id="tg-channels-btn" type="button">Подгрузить</button>
+                <button id="tg-add-selected-btn" type="button">+ Добавить выбранные</button>
+              </div>
+            </div>
+            <div id="tg-channels" class="list compact"></div>
+          </section>
         </section>
 
-        <section class="panel" aria-labelledby="sources-title">
-          <div class="panel-head">
-            <h2 id="sources-title">Источники</h2>
-            <button id="sources-refresh-btn" type="button">Обновить</button>
-          </div>
-          <div class="form-grid">
-            <label>
-              Ручной источник
-              <input id="manual-source" placeholder="@channel или RSS URL" />
-            </label>
-            <label>
-              Название
-              <input id="manual-title" placeholder="опционально" />
-            </label>
-            <label>
-              Тип
-              <select id="manual-type">
-                <option value="rss">RSS</option>
-                <option value="telethon">Telegram account</option>
-                <option value="web">Telegram web</option>
-                <option value="telegram_bot">Telegram Bot API</option>
-              </select>
-            </label>
-          </div>
-          <div class="button-row">
-            <button id="manual-add-btn" type="button">Добавить</button>
-          </div>
-          <div id="sources-list" class="list"></div>
-        </section>
-
-        <section class="panel" aria-labelledby="defaults-title">
-          <div class="panel-head">
-            <h2 id="defaults-title">Открытые IT RSS</h2>
-            <button id="defaults-refresh-btn" type="button">Обновить</button>
-          </div>
-          <div id="default-sources" class="list compact"></div>
-        </section>
-
-        <section class="panel" aria-labelledby="bots-title">
-          <div class="panel-head">
-            <h2 id="bots-title">Боты для постинга</h2>
+        <!-- ============================= BOTS ============================= -->
+        <section class="page" data-page="bots" hidden>
+          <div class="page-head">
+            <h2>Боты для постинга</h2>
             <button id="bots-refresh-btn" type="button">Обновить</button>
           </div>
           <p class="auth-copy">
-            Bot API — обычный Telegram-бот (нужен токен от @BotFather).
-            Telethon — публикация от твоей учётки (нужен авторизованный аккаунт сверху).
+            <b>Bot API</b> — обычный бот, токен от @BotFather.
+            <b>Telethon</b> — публикация от твоей учётки (требует авторизованный аккаунт в разделе TG-аккаунт).
           </p>
-          <div class="form-grid">
-            <label>
-              Название
-              <input id="new-bot-label" placeholder="MyChannelPoster" />
-            </label>
-            <label>
-              Тип
-              <select id="new-bot-kind">
-                <option value="bot_api">Bot API</option>
-                <option value="telethon">Telethon (учётка)</option>
-              </select>
-            </label>
-            <label>
-              Token (для Bot API)
-              <input id="new-bot-token" type="password" autocomplete="off" placeholder="123456:ABC..." />
-            </label>
-            <label>
-              Default chat id / @username
-              <input id="new-bot-chat" placeholder="@channel или -1001..." />
-            </label>
-          </div>
-          <div class="button-row">
-            <button id="new-bot-add-btn" type="button">Добавить бота</button>
-          </div>
-          <div id="bots-list" class="list"></div>
+
+          <section class="panel">
+            <div class="panel-head"><h3>Добавить бота</h3></div>
+            <div class="form-grid">
+              <label>
+                Название
+                <input id="new-bot-label" placeholder="MyChannelPoster" />
+              </label>
+              <label>
+                Тип
+                <select id="new-bot-kind">
+                  <option value="bot_api">Bot API</option>
+                  <option value="telethon">Telethon (учётка)</option>
+                </select>
+              </label>
+              <label>
+                Token (для Bot API)
+                <input id="new-bot-token" type="password" autocomplete="off" placeholder="123456:ABC..." />
+              </label>
+              <label>
+                Default chat (@channel или -100…)
+                <input id="new-bot-chat" placeholder="@my_channel" />
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="new-bot-add-btn" type="button">Добавить</button>
+            </div>
+          </section>
+
+          <div id="bots-list" class="card-grid"></div>
         </section>
 
-        <section class="panel" aria-labelledby="prompts-title">
-          <div class="panel-head">
-            <h2 id="prompts-title">Промпты под задачи</h2>
+        <!-- ============================= PROMPTS ============================= -->
+        <section class="page" data-page="prompts" hidden>
+          <div class="page-head">
+            <h2>Промпты под задачи</h2>
             <button id="prompts-refresh-btn" type="button">Обновить</button>
           </div>
           <p class="auth-copy">
-            Доступные плейсхолдеры: <code>{news}</code>, <code>{period}</code>, <code>{instruction}</code>.
-            Активный промпт в задаче используется автоматически.
+            Плейсхолдеры: <code>{news}</code>, <code>{period}</code>, <code>{instruction}</code>. Активный промпт автоматически используется в пайплайнах и LLM-вызовах.
           </p>
-          <div class="form-grid">
-            <label>
-              Задача
-              <select id="new-prompt-task">
-                <option value="repost">repost (пост в канал)</option>
-                <option value="summary">summary (сводка)</option>
-                <option value="dedup">dedup (удаление дублей)</option>
-                <option value="tags">tags (теги)</option>
-              </select>
-            </label>
-            <label>
-              Название
-              <input id="new-prompt-name" placeholder="snarky, formal, ..." />
-            </label>
-            <label class="check-label">
-              <input id="new-prompt-active" type="checkbox" checked />
-              Сделать активным
-            </label>
+
+          <div class="tabs sub-tabs" id="prompts-tasks">
+            <button class="sub-tab active" data-prompt-task="repost">repost</button>
+            <button class="sub-tab" data-prompt-task="summary">summary</button>
+            <button class="sub-tab" data-prompt-task="dedup">dedup</button>
+            <button class="sub-tab" data-prompt-task="tags">tags</button>
           </div>
-          <label>
-            System prompt
-            <textarea id="new-prompt-system" rows="3" placeholder="Ты редактор..."></textarea>
-          </label>
-          <label>
-            User template
-            <textarea id="new-prompt-user" rows="4" placeholder="Подборка: {news}\nИнструкция: {instruction}"></textarea>
-          </label>
-          <div class="button-row">
-            <button id="new-prompt-save-btn" type="button">Сохранить промпт</button>
-          </div>
+
           <div id="prompts-list" class="list"></div>
+
+          <section class="panel">
+            <div class="panel-head"><h3>Новый / редактирование</h3></div>
+            <div class="form-grid">
+              <label>
+                Задача
+                <select id="new-prompt-task">
+                  <option value="repost">repost</option>
+                  <option value="summary">summary</option>
+                  <option value="dedup">dedup</option>
+                  <option value="tags">tags</option>
+                </select>
+              </label>
+              <label>
+                Название
+                <input id="new-prompt-name" placeholder="default, snarky..." />
+              </label>
+              <label class="check-label">
+                <input id="new-prompt-active" type="checkbox" />
+                Сделать активным
+              </label>
+            </div>
+            <label>
+              System prompt
+              <textarea id="new-prompt-system" rows="3" placeholder="Ты редактор..."></textarea>
+            </label>
+            <label>
+              User template
+              <textarea id="new-prompt-user" rows="5" placeholder="Подборка: {news}"></textarea>
+            </label>
+            <div class="button-row">
+              <button id="new-prompt-save-btn" type="button">Сохранить</button>
+              <button id="new-prompt-clear-btn" type="button">Очистить</button>
+            </div>
+          </section>
         </section>
 
-        <section class="panel span-2" aria-labelledby="posting-title">
-          <div class="panel-head">
-            <h2 id="posting-title">Публикация поста</h2>
+        <!-- ============================= PIPELINES ============================= -->
+        <section class="page" data-page="pipelines" hidden>
+          <div class="page-head">
+            <h2>Пайплайны</h2>
             <div class="inline-controls">
-              <input id="post-days" type="number" min="1" max="30" value="1" />
-              <button id="post-preview-btn" type="button">Сгенерировать</button>
+              <button id="pipelines-refresh-btn" type="button">Обновить</button>
+              <button id="pipeline-new-btn" type="button">+ Создать пайплайн</button>
             </div>
           </div>
-          <div class="form-grid">
-            <label>
-              Бот
-              <select id="post-bot"><option value="">— нет ботов —</option></select>
-            </label>
-            <label>
-              Chat id (опционально)
-              <input id="post-chat" placeholder="@channel или -1001..." />
-            </label>
-            <label>
-              Стиль (имя промпта)
-              <input id="post-style" placeholder="default" />
-            </label>
-            <label>
-              Parse mode
-              <select id="post-parse-mode">
-                <option value="">none</option>
-                <option value="HTML">HTML</option>
-                <option value="Markdown">Markdown</option>
-                <option value="MarkdownV2">MarkdownV2</option>
-              </select>
-            </label>
-          </div>
-          <label>
-            Доп. инструкция редактору
-            <textarea id="post-instruction" rows="2" placeholder="например: добавь призыв подписаться"></textarea>
-          </label>
-          <label>
-            Текст поста
-            <textarea id="post-text" rows="8" placeholder="Сначала нажми «Сгенерировать», потом отредактируй и «Опубликовать»."></textarea>
-          </label>
-          <div class="button-row">
-            <button id="post-send-btn" type="button">Опубликовать</button>
-          </div>
-          <div id="post-status" class="notice"></div>
+          <div id="pipelines-list" class="list"></div>
+
+          <section class="panel" id="pipeline-editor" hidden>
+            <div class="panel-head">
+              <h3 id="pipeline-editor-title">Новый пайплайн</h3>
+              <button id="pipeline-editor-close-btn" type="button">Закрыть</button>
+            </div>
+            <div class="form-grid">
+              <label>
+                Название
+                <input id="pipeline-name" placeholder="Утренний дайджест" />
+              </label>
+              <label>
+                Группа
+                <input id="pipeline-group" placeholder="default" />
+              </label>
+              <label class="check-label">
+                <input id="pipeline-enabled" type="checkbox" checked />
+                Включён
+              </label>
+              <label>
+                Cron (опционально)
+                <input id="pipeline-cron" placeholder="*/30 * * * *" />
+              </label>
+            </div>
+            <h4>Шаги</h4>
+            <div id="pipeline-steps" class="list compact"></div>
+            <div class="button-row">
+              <button id="pipeline-add-step-btn" type="button">+ Добавить шаг</button>
+              <button id="pipeline-save-btn" type="button">Сохранить пайплайн</button>
+              <button id="pipeline-run-btn" type="button">Запустить сейчас</button>
+            </div>
+          </section>
         </section>
 
-        <section class="panel span-2" aria-labelledby="news-title">
-          <div class="panel-head">
-            <h2 id="news-title">Новости и сводка</h2>
+        <!-- ============================= RUNS ============================= -->
+        <section class="page" data-page="runs" hidden>
+          <div class="page-head">
+            <h2>Запуски пайплайнов</h2>
+            <div class="inline-controls">
+              <select id="runs-filter">
+                <option value="">Все пайплайны</option>
+              </select>
+              <button id="runs-refresh-btn" type="button">Обновить</button>
+            </div>
+          </div>
+          <div id="runs-list" class="list"></div>
+
+          <section class="panel" id="run-detail" hidden>
+            <div class="panel-head">
+              <h3 id="run-detail-title">Запуск</h3>
+              <button id="run-detail-close-btn" type="button">Закрыть</button>
+            </div>
+            <div id="run-detail-body"></div>
+          </section>
+        </section>
+
+        <!-- ============================= NEWS ============================= -->
+        <section class="page" data-page="news" hidden>
+          <div class="page-head">
+            <h2>Новости и публикация</h2>
             <div class="inline-controls">
               <input id="news-days" type="number" min="1" max="365" value="1" />
               <button id="news-load-btn" type="button">Показать</button>
-              <button id="summary-btn" type="button">Сводка LLM</button>
+              <button id="summary-btn" type="button">Сводка</button>
+              <button id="parse-all-btn" type="button">Парсить всё</button>
             </div>
           </div>
-          <div id="summary-box" class="summary"></div>
-          <div id="news-list" class="news-list"></div>
+
+          <section class="panel" id="post-composer">
+            <div class="panel-head"><h3>Сгенерировать и опубликовать пост</h3></div>
+            <div class="form-grid">
+              <label>
+                Бот
+                <select id="post-bot"><option value="">— нет ботов —</option></select>
+              </label>
+              <label>
+                Chat id (опционально)
+                <input id="post-chat" placeholder="@channel или -1001..." />
+              </label>
+              <label>
+                Стиль (имя промпта)
+                <input id="post-style" placeholder="default" />
+              </label>
+              <label>
+                Parse mode
+                <select id="post-parse-mode">
+                  <option value="">none</option>
+                  <option value="HTML">HTML</option>
+                  <option value="Markdown">Markdown</option>
+                  <option value="MarkdownV2">MarkdownV2</option>
+                </select>
+              </label>
+            </div>
+            <label>
+              Дополнительная инструкция
+              <textarea id="post-instruction" rows="2" placeholder="например: добавь призыв подписаться"></textarea>
+            </label>
+            <label>
+              Текст поста
+              <textarea id="post-text" rows="8" placeholder="Жми «Сгенерировать», правь, потом «Опубликовать»."></textarea>
+            </label>
+            <div class="button-row">
+              <button id="post-preview-btn" type="button">Сгенерировать</button>
+              <button id="post-send-btn" type="button">Опубликовать</button>
+            </div>
+            <div id="post-status" class="notice"></div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>Лента новостей</h3>
+              <div id="summary-box" class="summary"></div>
+            </div>
+            <div id="news-list" class="news-list"></div>
+          </section>
+        </section>
+
+        <!-- ============================= SETTINGS ============================= -->
+        <section class="page" data-page="settings" hidden>
+          <div class="page-head">
+            <h2>Настройки</h2>
+            <button id="settings-refresh-btn" type="button">Обновить</button>
+          </div>
+
+          <section class="panel">
+            <div class="panel-head"><h3>Telegram бот и аккаунт</h3></div>
+            <div class="form-grid">
+              <label>
+                Bot API token
+                <input id="bot-token" type="password" autocomplete="off" placeholder="123456:ABC..." />
+              </label>
+              <label>
+                Telethon API ID
+                <input id="bot-telethon-api-id" autocomplete="off" placeholder="12345678" />
+              </label>
+              <label>
+                Telethon API hash
+                <input id="bot-telethon-api-hash" type="password" autocomplete="off" />
+              </label>
+              <label>
+                Telethon phone
+                <input id="bot-telethon-phone" autocomplete="tel" placeholder="+79990000000" />
+              </label>
+              <label class="check-label">
+                <input id="bot-auto-parse" type="checkbox" />
+                Авто-парсинг
+              </label>
+              <label>
+                Интервал (сек)
+                <input id="bot-interval" type="number" min="60" step="60" placeholder="3600" />
+              </label>
+              <label>
+                Лимит сообщений
+                <input id="bot-parse-limit" type="number" min="1" placeholder="200" />
+              </label>
+              <label>
+                Глубина (дней)
+                <input id="bot-parse-days" type="number" min="1" placeholder="7" />
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="bot-settings-save-btn" type="button">Сохранить</button>
+              <button id="bot-env-export-btn" type="button">Показать env</button>
+              <button id="env-sync-btn" type="button">Синхронизировать env</button>
+            </div>
+            <pre id="env-export-box" class="summary" hidden></pre>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h3>LM Studio и парсеры</h3>
+              <button id="lm-test-btn" type="button">Проверить</button>
+            </div>
+            <div class="form-grid">
+              <label>
+                Base URL
+                <input id="lm-base-url" autocomplete="off" placeholder="https://lmstudio..." />
+              </label>
+              <label>
+                API mode
+                <select id="lm-api-mode">
+                  <option value="native">native /api/v1</option>
+                  <option value="openai">OpenAI /v1</option>
+                </select>
+              </label>
+              <label>
+                API token
+                <input id="lm-api-token" type="password" autocomplete="off" placeholder="optional" />
+              </label>
+              <label>
+                Selected model
+                <select id="lm-model"><option value="">— загрузите модели —</option></select>
+              </label>
+              <label>
+                Load context
+                <input id="lm-load-context" type="number" min="1024" step="1024" placeholder="8192" />
+              </label>
+              <label class="check-label">
+                <input id="lm-flash-attention" type="checkbox" checked />
+                Flash attention
+              </label>
+              <label>
+                Web parser engine
+                <select id="web-parser-engine">
+                  <option value="playwright">Playwright</option>
+                  <option value="selenium">Selenium</option>
+                </select>
+              </label>
+              <label class="check-label">
+                <input id="web-parser-headless" type="checkbox" checked />
+                Headless
+              </label>
+              <label>
+                Web parser timeout
+                <input id="web-parser-timeout" type="number" min="1" placeholder="30" />
+              </label>
+              <label>
+                Parser priority
+                <input id="parser-priority" autocomplete="off" placeholder="telethon, rss, web" />
+              </label>
+              <label>
+                Log level
+                <select id="log-level">
+                  <option value="DEBUG">DEBUG</option>
+                  <option value="INFO">INFO</option>
+                  <option value="WARNING">WARNING</option>
+                  <option value="ERROR">ERROR</option>
+                  <option value="CRITICAL">CRITICAL</option>
+                </select>
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="settings-save-btn" type="button">Сохранить</button>
+              <button id="models-load-btn" type="button">Получить модели</button>
+              <button id="selected-model-load-btn" type="button">Load selected</button>
+            </div>
+            <div id="lm-status" class="notice"></div>
+            <details>
+              <summary>Все модели</summary>
+              <div id="models-list" class="list compact"></div>
+            </details>
+          </section>
         </section>
       </main>
 
       <footer class="legal">
-        <span>NewsTgBot is AGPL-3.0-only free software.</span>
-        <span>No warranty.</span>
+        <span>NewsTgBot · AGPL-3.0-only.</span>
         <a href="https://www.gnu.org/licenses/agpl-3.0.html" rel="license noreferrer" target="_blank">License</a>
       </footer>
     </div>
