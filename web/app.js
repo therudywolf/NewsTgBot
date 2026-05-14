@@ -734,7 +734,25 @@ function clearPromptForm() {
   $("new-prompt-name").value = "";
   $("new-prompt-system").value = "";
   $("new-prompt-user").value = "";
+  $("new-prompt-sample").value = "";
   $("new-prompt-active").checked = false;
+  $("prompt-test-output").hidden = true;
+}
+
+async function testPromptDraft() {
+  const payload = {
+    system_prompt: $("new-prompt-system").value,
+    user_template: $("new-prompt-user").value,
+    sample_news: $("new-prompt-sample").value.trim() || undefined,
+  };
+  if (!payload.system_prompt.trim() || !payload.user_template.trim()) {
+    throw new Error("Заполни system и user-шаблон");
+  }
+  const out = $("prompt-test-output");
+  out.textContent = "⏳ Запрашиваю LLM…";
+  out.hidden = false;
+  const data = await api("/api/prompts/test", { method: "POST", body: JSON.stringify(payload) });
+  out.textContent = `--- Ответ LLM ---\n${data.text}\n\n--- Использованные данные ---\n${data.sample_used}`;
 }
 
 async function activatePrompt(id) {
@@ -801,6 +819,27 @@ async function loadPipelines() {
   const data = await api("/api/pipelines");
   store.set("pipelines", data.pipelines || []);
   renderPipelines();
+}
+
+async function createPipelineFromTemplate() {
+  const data = await api("/api/pipeline-templates");
+  const options = (data.templates || []).map((t, i) => `${i + 1}. ${t.id} — ${t.name} (${t.step_count} шагов)`).join("\n");
+  const choice = window.prompt(`Выбери шаблон по номеру или id:\n\n${options}\n\nНомер или id:`);
+  if (!choice) return;
+  const trimmed = choice.trim();
+  let templateId = trimmed;
+  const asNumber = Number(trimmed);
+  if (!Number.isNaN(asNumber) && (data.templates || [])[asNumber - 1]) {
+    templateId = data.templates[asNumber - 1].id;
+  }
+  const name = window.prompt("Название нового пайплайна:", "");
+  const created = await api("/api/pipelines/from-template", {
+    method: "POST",
+    body: JSON.stringify({ template: templateId, name: name || undefined }),
+  });
+  toast(`Создан: ${created.name}`);
+  await loadPipelines();
+  openPipelineEditor(created);
 }
 
 function renderStepEditor() {
@@ -1023,15 +1062,26 @@ pageLoaders.runs = loadRuns;
 
 // ---- News page -------------------------------------------------------------
 
-function renderNews(rows) {
+function renderNews(rows, mediaMap = {}) {
   $("news-list").innerHTML = rows.length
     ? rows
-        .map((row) => `
-          <article class="news-card">
-            <div class="news-meta">${escapeHtml(fmtDate(row.date))} · ${escapeHtml(row.title || row.username || row.channel_id)}</div>
-            <div class="news-text">${escapeHtml(row.text)}</div>
-          </article>
-        `)
+        .map((row) => {
+          const media = mediaMap[row.id] || [];
+          const thumb = media.find((m) => m.kind === "image" && m.url);
+          const thumbHtml = thumb
+            ? `<img class="news-thumb" loading="lazy" src="${escapeHtml(thumb.url)}" alt="" />`
+            : "";
+          const badge = media.length ? `<span class="tag">🖼 ${media.length}</span>` : "";
+          return `
+            <article class="news-card">
+              <div class="news-meta">${escapeHtml(fmtDate(row.date))} · ${escapeHtml(row.title || row.username || row.channel_id)} ${badge}</div>
+              <div class="news-body">
+                ${thumbHtml}
+                <div class="news-text">${escapeHtml(row.text)}</div>
+              </div>
+            </article>
+          `;
+        })
         .join("")
     : `<div class="notice">Новостей нет.</div>`;
 }
@@ -1039,8 +1089,23 @@ function renderNews(rows) {
 async function loadNews() {
   const days = Number($("news-days").value || 1);
   const data = await api(`/api/news?days=${days}&limit=200`);
-  store.set("news", data.news || []);
-  renderNews(data.news || []);
+  const rows = data.news || [];
+  store.set("news", rows);
+
+  // Pull media for the visible window in parallel; ignore failures so the
+  // page still renders if some news has no media.
+  const mediaMap = {};
+  await Promise.allSettled(
+    rows.slice(0, 30).map(async (row) => {
+      try {
+        const r = await api(`/api/news/${row.id}/media`);
+        if (r.media && r.media.length) mediaMap[row.id] = r.media;
+      } catch {
+        /* ignore */
+      }
+    }),
+  );
+  renderNews(rows, mediaMap);
 }
 
 async function summarizeNews() {
@@ -1320,6 +1385,7 @@ function wireEvents() {
   // Prompts
   $("prompts-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadPrompts).catch(() => {}));
   $("new-prompt-save-btn").addEventListener("click", (e) => withBusy(e.target, savePrompt).catch(() => {}));
+  $("new-prompt-test-btn").addEventListener("click", (e) => withBusy(e.target, testPromptDraft).catch(() => {}));
   $("new-prompt-clear-btn").addEventListener("click", clearPromptForm);
   $("prompts-tasks").addEventListener("click", (e) => {
     const task = e.target?.dataset?.promptTask;
@@ -1332,6 +1398,7 @@ function wireEvents() {
   // Pipelines
   $("pipelines-refresh-btn").addEventListener("click", () => reloadPage("pipelines"));
   $("pipeline-new-btn").addEventListener("click", () => openPipelineEditor(null));
+  $("pipeline-template-btn").addEventListener("click", (e) => withBusy(e.target, createPipelineFromTemplate).catch(() => {}));
   $("pipeline-editor-close-btn").addEventListener("click", closePipelineEditor);
   $("pipeline-add-step-btn").addEventListener("click", addPipelineStep);
   $("pipeline-save-btn").addEventListener("click", (e) => withBusy(e.target, savePipeline).catch(() => {}));

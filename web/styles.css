@@ -657,3 +657,34 @@ textarea {
   .split-2col, .panel-row { grid-template-columns: 1fr; }
   .tabs { justify-content: flex-start; overflow-x: auto; flex-wrap: nowrap; }
 }
+
+.news-body { display: flex; gap: 12px; align-items: flex-start; }
+.news-thumb {
+  width: 120px;
+  height: 90px;
+  object-fit: cover;
+  border-radius: 10px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.step-item textarea {
+  font-size: 12px;
+  min-height: 70px;
+}
+details.panel summary {
+  cursor: pointer;
+  font-weight: 500;
+  padding: 6px 0;
+}
+details.panel summary:hover { color: var(--accent); }
+
+#prompt-test-output {
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 700px) {
+  .news-thumb { width: 80px; height: 60px; }
+}

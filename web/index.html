@@ -303,10 +303,16 @@
               User template
               <textarea id="new-prompt-user" rows="5" placeholder="Подборка: {news}"></textarea>
             </label>
+            <label>
+              Sample news для теста (опционально)
+              <textarea id="new-prompt-sample" rows="3" placeholder="Если пусто — возьму 5 свежих новостей."></textarea>
+            </label>
             <div class="button-row">
               <button id="new-prompt-save-btn" type="button">Сохранить</button>
+              <button id="new-prompt-test-btn" type="button">⚡ Тест</button>
               <button id="new-prompt-clear-btn" type="button">Очистить</button>
             </div>
+            <pre id="prompt-test-output" class="summary" hidden></pre>
           </section>
         </section>
 
@@ -317,8 +323,30 @@
             <div class="inline-controls">
               <button id="pipelines-refresh-btn" type="button">Обновить</button>
               <button id="pipeline-new-btn" type="button">+ Создать пайплайн</button>
+              <button id="pipeline-template-btn" type="button">📋 Из шаблона</button>
             </div>
           </div>
+
+          <details id="pipeline-help" class="panel">
+            <summary><b>Шпаргалка: типы шагов и cron</b></summary>
+            <div class="item-meta" style="white-space:pre-wrap">
+<b>Шаги</b>:
+  parse_sources  — собрать новости из источников. params: {"source_group":"all|rss|telethon|web","days":1,"limit":200}
+  filter         — отсев. params: {"keywords_include":["ai"],"keywords_exclude":[],"min_text_length":30,"days":1}
+  dedup          — LLM-дедупликация (активный промпт «dedup»)
+  summary        — LLM-сводка. params: {"period_label":"сутки"}
+  compose_post   — LLM-пост. params: {"prompt_name":"default","include_image":true,"instruction":""}
+  publish        — отправка. params: {"bot_id":1,"chat_id":"@my_channel","parse_mode":"HTML","include_image":true}
+  wait           — пауза. params: {"seconds":30}
+
+<b>Cron</b> (5 полей: мин час день месяц день_недели):
+  */15 * * * *    — каждые 15 минут
+  0 9 * * 1-5     — будни в 9:00
+  0 8,20 * * *    — 8 утра и 8 вечера
+  0 */2 * * *     — каждые 2 часа
+            </div>
+          </details>
+
           <div id="pipelines-list" class="list"></div>
 
           <section class="panel" id="pipeline-editor" hidden>

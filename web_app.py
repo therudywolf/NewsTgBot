@@ -241,6 +241,19 @@ class PipelineStepPayload(BaseModel):
     params: Dict[str, Any] = Field(default_factory=dict)
 
 
+class PromptTestPayload(BaseModel):
+    system_prompt: str = Field(min_length=1, max_length=8000)
+    user_template: str = Field(min_length=1, max_length=12000)
+    sample_news: Optional[str] = Field(default=None, max_length=8000)
+    instruction: Optional[str] = Field(default=None, max_length=2000)
+    period: Optional[str] = Field(default=None, max_length=128)
+
+
+class PipelineTemplatePayload(BaseModel):
+    template: str = Field(pattern="^(full_pipeline|summary_only|repost_only|parse_only)$")
+    name: Optional[str] = Field(default=None, max_length=128)
+
+
 class PipelinePayload(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     group_name: str = Field(default="default", min_length=1, max_length=64)
@@ -833,6 +846,39 @@ async def upsert_prompt(payload: PromptPayload):
     )}
 
 
+@app.post("/api/prompts/test")
+async def test_prompt_endpoint(payload: PromptTestPayload):
+    """Run a one-off chat request with the given prompt against current LLM.
+
+    Used by the prompt editor to preview output without saving anything.
+    Placeholders {news}, {period}, {instruction} are substituted in the
+    user_template before sending.
+    """
+    sample = (payload.sample_news or "").strip()
+    if not sample:
+        # Fall back to the last 5 news items so the user gets a realistic
+        # preview when they haven't typed any sample.
+        end = datetime.now()
+        start = end - timedelta(days=2)
+        rows = db.get_news_by_period(start.isoformat(), end.isoformat())[:5]
+        sample = "\n\n".join(
+            f"{i+1}. [{row.get('title') or row.get('username') or 'src'}] {row.get('date','')}\n{row.get('text','')}"
+            for i, row in enumerate(rows)
+        ) or "1. [demo] Пример новости: OpenAI выпустила обновление модели."
+
+    user_text = (
+        payload.user_template
+        .replace("{news}", sample)
+        .replace("{period}", payload.period or "demo")
+        .replace("{instruction}", payload.instruction or "")
+    )
+    try:
+        text = await _llm_client().chat(payload.system_prompt, user_text)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"text": text or "", "sample_used": sample}
+
+
 @app.post("/api/prompts/{prompt_id}/activate")
 async def activate_prompt(prompt_id: int):
     if not db.set_active_prompt(prompt_id):
@@ -998,6 +1044,80 @@ async def run_pipeline_endpoint(pipeline_id: int):
 async def list_runs_endpoint(pipeline_id: Optional[int] = None, limit: int = 100):
     runs = db.list_runs(pipeline_id=pipeline_id, limit=min(limit, 500))
     return {"runs": runs}
+
+
+# ---- Pipeline templates ----------------------------------------------------
+
+_PIPELINE_TEMPLATES = {
+    "full_pipeline": {
+        "name": "Полный конвейер",
+        "steps": [
+            {"type": "parse_sources", "params": {"source_group": "all", "days": 1, "limit": 200}},
+            {"type": "filter", "params": {"min_text_length": 30, "keywords_exclude": []}},
+            {"type": "dedup", "params": {}},
+            {"type": "compose_post", "params": {"prompt_name": "default", "include_image": True, "instruction": ""}},
+            {"type": "publish", "params": {"bot_id": 0, "include_image": True}},
+        ],
+    },
+    "summary_only": {
+        "name": "Только сводка",
+        "steps": [
+            {"type": "parse_sources", "params": {"source_group": "all", "days": 1, "limit": 200}},
+            {"type": "dedup", "params": {}},
+            {"type": "summary", "params": {"period_label": "сутки"}},
+        ],
+    },
+    "repost_only": {
+        "name": "Только репост (без парсинга)",
+        "steps": [
+            {"type": "filter", "params": {"days": 1, "min_text_length": 30}},
+            {"type": "dedup", "params": {}},
+            {"type": "compose_post", "params": {"prompt_name": "default", "include_image": True}},
+            {"type": "publish", "params": {"bot_id": 0, "include_image": True}},
+        ],
+    },
+    "parse_only": {
+        "name": "Только парсинг",
+        "steps": [
+            {"type": "parse_sources", "params": {"source_group": "all", "days": 3, "limit": 500}},
+        ],
+    },
+}
+
+
+@app.get("/api/pipeline-templates")
+async def list_pipeline_templates():
+    return {
+        "templates": [
+            {"id": key, "name": tpl["name"], "step_count": len(tpl["steps"]), "steps": tpl["steps"]}
+            for key, tpl in _PIPELINE_TEMPLATES.items()
+        ]
+    }
+
+
+@app.post("/api/pipelines/from-template")
+async def create_pipeline_from_template(payload: PipelineTemplatePayload):
+    tpl = _PIPELINE_TEMPLATES.get(payload.template)
+    if not tpl:
+        raise HTTPException(status_code=400, detail="Unknown template")
+    pipeline_id = db.upsert_pipeline(
+        pipeline_id=None,
+        name=(payload.name or tpl["name"]).strip(),
+        group_name="templates",
+        enabled=False,  # let the user wire bot_id before enabling
+        schedule_cron=None,
+        steps=tpl["steps"],
+    )
+    return db.get_pipeline(pipeline_id)
+
+
+# ---- News media ------------------------------------------------------------
+
+
+@app.get("/api/news/{news_id}/media")
+async def news_media_endpoint(news_id: int):
+    media = db.get_media_for_news([news_id]).get(news_id, [])
+    return {"media": media}
 
 
 @app.get("/api/runs/{run_id}")
