@@ -52,6 +52,63 @@ async def send_via_bot_api(
             return data.get("result", {})
 
 
+async def send_photo_via_bot_api(
+    token: str,
+    chat_id: str,
+    photo_url: str,
+    caption: Optional[str] = None,
+    parse_mode: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Publish *photo_url* to *chat_id* via Bot API sendPhoto.
+
+    Captions are limited to 1024 chars; longer text is split off and sent
+    as a separate reply message so it isn't silently truncated.
+    """
+    if not token:
+        raise PostingError("Bot token is not configured")
+    if not chat_id:
+        raise PostingError("Target chat id is required")
+    if not photo_url:
+        raise PostingError("Photo URL is required")
+
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    caption_for_photo = (caption or "")[:1024] or None
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "photo": photo_url,
+    }
+    if caption_for_photo:
+        payload["caption"] = caption_for_photo
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+
+    timeout = aiohttp.ClientTimeout(total=60)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(url, json=payload) as response:
+            data = await response.json(content_type=None)
+            if response.status >= 400 or not data.get("ok"):
+                raise PostingError(
+                    f"Bot API sendPhoto error {response.status}: {data.get('description') or data}"
+                )
+            result = data.get("result", {})
+
+    # If the caption was truncated, follow up with the rest as a reply.
+    if caption and len(caption) > 1024:
+        try:
+            extra = caption[1024:]
+            await send_via_bot_api(
+                token=token,
+                chat_id=chat_id,
+                text=extra,
+                parse_mode=parse_mode,
+                disable_web_page_preview=True,
+            )
+        except PostingError as exc:  # noqa: BLE001 — best-effort follow-up
+            logger.warning("Photo follow-up failed: %s", exc)
+
+    return result
+
+
 async def send_via_telethon(
     telegram_account_service,
     chat_id: str,

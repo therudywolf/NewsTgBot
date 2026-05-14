@@ -32,6 +32,7 @@ from channel_reader import ChannelReader
 from database import Database
 from deduplicator import Deduplicator
 from llm_client import LLMClient
+import pipeline_executor
 import poster
 from source_identity import stable_source_id
 from telegram_account import TelegramAccountService
@@ -231,6 +232,19 @@ class PostingSendPayload(BaseModel):
     chat_id: Optional[str] = Field(default=None, max_length=128)
     parse_mode: Optional[str] = Field(default=None, pattern="^(Markdown|MarkdownV2|HTML)$")
     disable_web_page_preview: bool = True
+
+
+class PipelineStepPayload(BaseModel):
+    type: str = Field(pattern="^(parse_sources|filter|dedup|summary|compose_post|publish|wait)$")
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class PipelinePayload(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    group_name: str = Field(default="default", min_length=1, max_length=64)
+    enabled: bool = True
+    schedule_cron: Optional[str] = Field(default=None, max_length=128)
+    steps: List[PipelineStepPayload] = Field(default_factory=list)
 
 
 def _mask_token(token: str) -> str:
@@ -901,6 +915,84 @@ async def posting_send(payload: PostingSendPayload):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return {"sent": True, "result": result, "bot_id": bot["id"], "chat_id": chat_id}
+
+
+# ---- Pipelines ------------------------------------------------------------
+
+
+@app.get("/api/pipelines")
+async def list_pipelines_endpoint():
+    return {"pipelines": db.list_pipelines()}
+
+
+@app.get("/api/pipelines/{pipeline_id}")
+async def get_pipeline_endpoint(pipeline_id: int):
+    pipeline = db.get_pipeline(pipeline_id)
+    if not pipeline:
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    return pipeline
+
+
+@app.post("/api/pipelines")
+async def create_pipeline_endpoint(payload: PipelinePayload):
+    pipeline_id = db.upsert_pipeline(
+        pipeline_id=None,
+        name=payload.name.strip(),
+        group_name=payload.group_name.strip() or "default",
+        enabled=payload.enabled,
+        schedule_cron=(payload.schedule_cron or "").strip() or None,
+        steps=[step.model_dump() for step in payload.steps],
+    )
+    return db.get_pipeline(pipeline_id)
+
+
+@app.put("/api/pipelines/{pipeline_id}")
+async def update_pipeline_endpoint(pipeline_id: int, payload: PipelinePayload):
+    if not db.get_pipeline(pipeline_id):
+        raise HTTPException(status_code=404, detail="Pipeline not found")
+    db.upsert_pipeline(
+        pipeline_id=pipeline_id,
+        name=payload.name.strip(),
+        group_name=payload.group_name.strip() or "default",
+        enabled=payload.enabled,
+        schedule_cron=(payload.schedule_cron or "").strip() or None,
+        steps=[step.model_dump() for step in payload.steps],
+    )
+    return db.get_pipeline(pipeline_id)
+
+
+@app.delete("/api/pipelines/{pipeline_id}")
+async def delete_pipeline_endpoint(pipeline_id: int):
+    return {"removed": db.delete_pipeline(pipeline_id)}
+
+
+@app.post("/api/pipelines/{pipeline_id}/run")
+async def run_pipeline_endpoint(pipeline_id: int):
+    try:
+        result = await pipeline_executor.run_pipeline(
+            db=db,
+            channel_reader=channel_reader,
+            telegram_account_service=telegram_account,
+            pipeline_id=pipeline_id,
+            trigger="manual",
+        )
+        return result
+    except pipeline_executor.PipelineError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/runs")
+async def list_runs_endpoint(pipeline_id: Optional[int] = None, limit: int = 100):
+    runs = db.list_runs(pipeline_id=pipeline_id, limit=min(limit, 500))
+    return {"runs": runs}
+
+
+@app.get("/api/runs/{run_id}")
+async def get_run_endpoint(run_id: int):
+    detail = db.get_run_detail(run_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return detail
 
 
 _DEFAULT_PROMPTS = [

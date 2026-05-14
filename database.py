@@ -194,6 +194,93 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_llm_prompts_task
             ON llm_prompts(task, is_active DESC)
         """)
+
+        # Pipelines — named workflows composed of ordered steps. Each pipeline
+        # may have a cron schedule (used by stage C scheduler) and lives in
+        # an optional `group_name` for visual grouping in the UI.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pipelines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                group_name TEXT NOT NULL DEFAULT 'default',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                schedule_cron TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                params TEXT NOT NULL DEFAULT '{}',
+                FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pipeline_steps_pipeline
+            ON pipeline_steps(pipeline_id, position)
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pipeline_id INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                trigger TEXT NOT NULL DEFAULT 'manual',
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                error TEXT,
+                output TEXT,
+                FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pipeline_runs_pipeline
+            ON pipeline_runs(pipeline_id, started_at DESC)
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_step_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                step_id INTEGER,
+                position INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                status TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                input TEXT,
+                output TEXT,
+                error TEXT,
+                FOREIGN KEY (run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pipeline_step_runs_run
+            ON pipeline_step_runs(run_id, position)
+        """)
+
+        # Media attachments captured from parsed news items (stage D).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS news_media (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                news_id INTEGER NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'image',
+                url TEXT,
+                local_path TEXT,
+                mime TEXT,
+                width INTEGER,
+                height INTEGER,
+                downloaded INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (news_id) REFERENCES news(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_news_media_news
+            ON news_media(news_id)
+        """)
         
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_sources_channel 
@@ -971,6 +1058,320 @@ class Database:
         removed = cursor.rowcount > 0
         conn.close()
         return removed
+
+    # ---- Pipelines -------------------------------------------------------
+    def list_pipelines(self) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, group_name, enabled, schedule_cron, created_at, updated_at
+            FROM pipelines ORDER BY group_name, name
+        """)
+        rows = [dict(r) for r in cur.fetchall()]
+        for row in rows:
+            row["enabled"] = bool(row["enabled"])
+            cur.execute(
+                "SELECT id, position, type, params FROM pipeline_steps WHERE pipeline_id = ? ORDER BY position",
+                (row["id"],),
+            )
+            row["steps"] = [
+                {
+                    "id": s["id"],
+                    "position": s["position"],
+                    "type": s["type"],
+                    "params": json.loads(s["params"]) if s["params"] else {},
+                }
+                for s in cur.fetchall()
+            ]
+            cur.execute(
+                "SELECT id, status, started_at, finished_at FROM pipeline_runs WHERE pipeline_id = ? ORDER BY started_at DESC LIMIT 5",
+                (row["id"],),
+            )
+            row["recent_runs"] = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def get_pipeline(self, pipeline_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, group_name, enabled, schedule_cron, created_at, updated_at
+            FROM pipelines WHERE id = ?
+        """, (pipeline_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return None
+        out = dict(row)
+        out["enabled"] = bool(out["enabled"])
+        cur.execute(
+            "SELECT id, position, type, params FROM pipeline_steps WHERE pipeline_id = ? ORDER BY position",
+            (pipeline_id,),
+        )
+        out["steps"] = [
+            {
+                "id": s["id"],
+                "position": s["position"],
+                "type": s["type"],
+                "params": json.loads(s["params"]) if s["params"] else {},
+            }
+            for s in cur.fetchall()
+        ]
+        conn.close()
+        return out
+
+    def upsert_pipeline(
+        self,
+        pipeline_id: Optional[int],
+        name: str,
+        group_name: str,
+        enabled: bool,
+        schedule_cron: Optional[str],
+        steps: List[Dict[str, Any]],
+    ) -> int:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        now = datetime.now().isoformat()
+        if pipeline_id:
+            cur.execute("""
+                UPDATE pipelines
+                SET name = ?, group_name = ?, enabled = ?, schedule_cron = ?, updated_at = ?
+                WHERE id = ?
+            """, (name, group_name, 1 if enabled else 0, schedule_cron, now, pipeline_id))
+            cur.execute("DELETE FROM pipeline_steps WHERE pipeline_id = ?", (pipeline_id,))
+        else:
+            cur.execute("""
+                INSERT INTO pipelines (name, group_name, enabled, schedule_cron, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (name, group_name, 1 if enabled else 0, schedule_cron, now, now))
+            pipeline_id = cur.lastrowid
+
+        for idx, step in enumerate(steps):
+            cur.execute("""
+                INSERT INTO pipeline_steps (pipeline_id, position, type, params)
+                VALUES (?, ?, ?, ?)
+            """, (
+                pipeline_id,
+                idx,
+                step.get("type", ""),
+                json.dumps(step.get("params") or {}, ensure_ascii=False),
+            ))
+        conn.commit()
+        conn.close()
+        return int(pipeline_id)
+
+    def delete_pipeline(self, pipeline_id: int) -> bool:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM pipelines WHERE id = ?", (pipeline_id,))
+        conn.commit()
+        removed = cur.rowcount > 0
+        conn.close()
+        return removed
+
+    # ---- Pipeline runs ---------------------------------------------------
+    def create_run(self, pipeline_id: int, trigger: str = "manual") -> int:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO pipeline_runs (pipeline_id, status, trigger, started_at)
+            VALUES (?, 'running', ?, ?)
+        """, (pipeline_id, trigger, datetime.now().isoformat()))
+        conn.commit()
+        run_id = cur.lastrowid
+        conn.close()
+        return int(run_id)
+
+    def finish_run(
+        self,
+        run_id: int,
+        status: str,
+        output: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE pipeline_runs
+            SET status = ?, finished_at = ?, output = ?, error = ?
+            WHERE id = ?
+        """, (
+            status,
+            datetime.now().isoformat(),
+            json.dumps(output, ensure_ascii=False) if output else None,
+            error,
+            run_id,
+        ))
+        conn.commit()
+        conn.close()
+
+    def add_step_run(
+        self,
+        run_id: int,
+        step_id: Optional[int],
+        position: int,
+        type_: str,
+        status: str,
+        started_at: str,
+        finished_at: Optional[str],
+        input_data: Optional[Dict[str, Any]],
+        output_data: Optional[Dict[str, Any]],
+        error: Optional[str],
+    ) -> int:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO pipeline_step_runs
+                (run_id, step_id, position, type, status, started_at, finished_at, input, output, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            run_id, step_id, position, type_, status, started_at, finished_at,
+            json.dumps(input_data, ensure_ascii=False) if input_data else None,
+            json.dumps(output_data, ensure_ascii=False) if output_data else None,
+            error,
+        ))
+        conn.commit()
+        sr_id = cur.lastrowid
+        conn.close()
+        return int(sr_id)
+
+    def list_runs(self, pipeline_id: Optional[int] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        if pipeline_id:
+            cur.execute("""
+                SELECT r.id, r.pipeline_id, p.name as pipeline_name, r.status, r.trigger,
+                       r.started_at, r.finished_at, r.error
+                FROM pipeline_runs r
+                LEFT JOIN pipelines p ON p.id = r.pipeline_id
+                WHERE r.pipeline_id = ?
+                ORDER BY r.started_at DESC LIMIT ?
+            """, (pipeline_id, limit))
+        else:
+            cur.execute("""
+                SELECT r.id, r.pipeline_id, p.name as pipeline_name, r.status, r.trigger,
+                       r.started_at, r.finished_at, r.error
+                FROM pipeline_runs r
+                LEFT JOIN pipelines p ON p.id = r.pipeline_id
+                ORDER BY r.started_at DESC LIMIT ?
+            """, (limit,))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def get_run_detail(self, run_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT r.id, r.pipeline_id, p.name as pipeline_name, r.status, r.trigger,
+                   r.started_at, r.finished_at, r.error, r.output
+            FROM pipeline_runs r
+            LEFT JOIN pipelines p ON p.id = r.pipeline_id
+            WHERE r.id = ?
+        """, (run_id,))
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return None
+        out = dict(row)
+        if out.get("output"):
+            try:
+                out["output"] = json.loads(out["output"])
+            except (TypeError, json.JSONDecodeError):
+                pass
+        cur.execute("""
+            SELECT id, step_id, position, type, status, started_at, finished_at,
+                   input, output, error
+            FROM pipeline_step_runs WHERE run_id = ? ORDER BY position
+        """, (run_id,))
+        steps = []
+        for s in cur.fetchall():
+            entry = dict(s)
+            for k in ("input", "output"):
+                if entry.get(k):
+                    try:
+                        entry[k] = json.loads(entry[k])
+                    except (TypeError, json.JSONDecodeError):
+                        pass
+            steps.append(entry)
+        out["steps"] = steps
+        conn.close()
+        return out
+
+    # ---- News helpers used by pipeline steps -----------------------------
+    def get_news_by_ids(self, ids: List[int]) -> List[Dict[str, Any]]:
+        if not ids:
+            return []
+        conn = self._get_connection()
+        cur = conn.cursor()
+        placeholders = ",".join("?" * len(ids))
+        cur.execute(f"""
+            SELECT n.id, n.channel_id, n.message_id, n.text, n.date, n.processed,
+                   c.username, c.title
+            FROM news n
+            LEFT JOIN channels c ON n.channel_id = c.channel_id
+            WHERE n.id IN ({placeholders})
+            ORDER BY n.date DESC
+        """, tuple(ids))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def get_news_ids_by_period(self, start_date: str, end_date: str) -> List[int]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id FROM news WHERE date >= ? AND date <= ?
+            ORDER BY date DESC
+        """, (start_date, end_date))
+        rows = [row["id"] for row in cur.fetchall()]
+        conn.close()
+        return rows
+
+    # ---- News media (stage D) --------------------------------------------
+    def add_news_media(
+        self,
+        news_id: int,
+        url: Optional[str],
+        kind: str = "image",
+        local_path: Optional[str] = None,
+        mime: Optional[str] = None,
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+    ) -> Optional[int]:
+        if not url and not local_path:
+            return None
+        conn = self._get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                INSERT INTO news_media (news_id, kind, url, local_path, mime, width, height, downloaded, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (news_id, kind, url, local_path, mime, width, height, 1 if local_path else 0, datetime.now().isoformat()))
+            conn.commit()
+            return int(cur.lastrowid)
+        except sqlite3.Error as e:
+            logger.error(f"Error adding news media: {e}")
+            return None
+        finally:
+            conn.close()
+
+    def get_media_for_news(self, news_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+        if not news_ids:
+            return {}
+        conn = self._get_connection()
+        cur = conn.cursor()
+        placeholders = ",".join("?" * len(news_ids))
+        cur.execute(f"""
+            SELECT id, news_id, kind, url, local_path, mime, width, height
+            FROM news_media WHERE news_id IN ({placeholders})
+            ORDER BY id
+        """, tuple(news_ids))
+        media: Dict[int, List[Dict[str, Any]]] = {}
+        for row in cur.fetchall():
+            media.setdefault(row["news_id"], []).append(dict(row))
+        conn.close()
+        return media
 
     def get_settings(self) -> Dict[str, Any]:
         """Read all application settings."""

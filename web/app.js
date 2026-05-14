@@ -752,46 +752,271 @@ async function removePrompt(id) {
 
 pageLoaders.prompts = loadPrompts;
 
-// ---- Pipelines (placeholder for stage B) ----------------------------------
+// ---- Pipelines -------------------------------------------------------------
 
-async function loadPipelines() {
-  try {
-    const data = await api("/api/pipelines");
-    store.set("pipelines", data.pipelines || []);
-    renderPipelines();
-  } catch (e) {
-    $("pipelines-list").innerHTML = `<div class="notice">Бэкенд пайплайнов появится на следующем этапе. ${escapeHtml(e.message)}</div>`;
-  }
+const STEP_TYPES = ["parse_sources", "filter", "dedup", "summary", "compose_post", "publish", "wait"];
+let editorState = { pipelineId: null, steps: [] };
+
+function statusTagClass(status) {
+  if (status === "success") return "loaded";
+  if (status === "failed") return "danger";
+  return "";
 }
 
 function renderPipelines() {
   const items = store.get("pipelines") || [];
   if (!items.length) {
-    $("pipelines-list").innerHTML = `<div class="notice">Пайплайнов пока нет.</div>`;
+    $("pipelines-list").innerHTML = `<div class="notice">Пайплайнов пока нет — нажми «Создать пайплайн».</div>`;
     return;
   }
-  $("pipelines-list").innerHTML = items.map((p) => `<div class="item"><div class="item-title">${escapeHtml(p.name)}</div></div>`).join("");
+  $("pipelines-list").innerHTML = items
+    .map((p) => {
+      const recent = (p.recent_runs || [])
+        .map((r) => `<span class="tag ${statusTagClass(r.status)}">${escapeHtml(r.status)}</span>`)
+        .join(" ");
+      return `
+        <article class="card">
+          <header class="card-head">
+            <div>
+              <div class="item-title">${escapeHtml(p.name)}</div>
+              <div class="item-meta">${escapeHtml(p.group_name)} · ${p.steps.length} шагов · ${p.enabled ? "enabled" : "disabled"}${p.schedule_cron ? ` · cron ${escapeHtml(p.schedule_cron)}` : ""}</div>
+            </div>
+            <div class="card-actions">
+              <button type="button" data-pipeline-run="${p.id}">▶ Запустить</button>
+              <button type="button" data-pipeline-edit="${p.id}">Изменить</button>
+              <button type="button" data-pipeline-remove="${p.id}" class="danger">×</button>
+            </div>
+          </header>
+          <div class="card-body">
+            <div class="item-meta">Шаги: ${p.steps.map((s) => escapeHtml(s.type)).join(" → ") || "—"}</div>
+            <div>${recent || `<span class="item-meta">Без запусков</span>`}</div>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+async function loadPipelines() {
+  const data = await api("/api/pipelines");
+  store.set("pipelines", data.pipelines || []);
+  renderPipelines();
+}
+
+function renderStepEditor() {
+  const container = $("pipeline-steps");
+  if (!editorState.steps.length) {
+    container.innerHTML = `<div class="notice">Нет шагов. Добавь хотя бы один — например, «parse_sources».</div>`;
+    return;
+  }
+  container.innerHTML = editorState.steps
+    .map((step, idx) => `
+      <div class="item step-item">
+        <div>
+          <div class="item-title">#${idx + 1} · ${escapeHtml(step.type)}</div>
+          <textarea data-step-params="${idx}" rows="3">${escapeHtml(JSON.stringify(step.params || {}, null, 2))}</textarea>
+        </div>
+        <div class="item-actions">
+          <button type="button" data-step-up="${idx}" ${idx === 0 ? "disabled" : ""}>↑</button>
+          <button type="button" data-step-down="${idx}" ${idx === editorState.steps.length - 1 ? "disabled" : ""}>↓</button>
+          <button type="button" data-step-remove="${idx}" class="danger">×</button>
+        </div>
+      </div>
+    `)
+    .join("");
+}
+
+function openPipelineEditor(pipeline) {
+  editorState = pipeline
+    ? {
+        pipelineId: pipeline.id,
+        steps: (pipeline.steps || []).map((s) => ({ type: s.type, params: s.params || {} })),
+      }
+    : { pipelineId: null, steps: [] };
+
+  $("pipeline-editor-title").textContent = pipeline ? `Редактирование: ${pipeline.name}` : "Новый пайплайн";
+  $("pipeline-name").value = pipeline?.name || "";
+  $("pipeline-group").value = pipeline?.group_name || "default";
+  $("pipeline-enabled").checked = pipeline ? !!pipeline.enabled : true;
+  $("pipeline-cron").value = pipeline?.schedule_cron || "";
+  renderStepEditor();
+  $("pipeline-editor").hidden = false;
+  $("pipeline-editor").scrollIntoView({ behavior: "smooth" });
+}
+
+function closePipelineEditor() {
+  $("pipeline-editor").hidden = true;
+}
+
+function addPipelineStep() {
+  const type = window.prompt(`Тип шага (${STEP_TYPES.join(", ")}):`, "parse_sources");
+  if (!type) return;
+  if (!STEP_TYPES.includes(type)) {
+    toast(`Неизвестный тип шага: ${type}`);
+    return;
+  }
+  const defaults = {
+    parse_sources: { days: 1, limit: 200, source_group: "all" },
+    filter: { keywords_include: [], keywords_exclude: [], min_text_length: 0 },
+    dedup: {},
+    summary: { period_label: "сутки" },
+    compose_post: { prompt_name: "default", include_image: false, instruction: "" },
+    publish: { bot_id: 0, chat_id: "", parse_mode: "", include_image: false },
+    wait: { seconds: 30 },
+  };
+  editorState.steps.push({ type, params: defaults[type] || {} });
+  renderStepEditor();
+}
+
+function readStepsFromEditor() {
+  const steps = editorState.steps.map((step, idx) => {
+    const textarea = qs(`[data-step-params="${idx}"]`);
+    let params = step.params || {};
+    if (textarea) {
+      try {
+        params = JSON.parse(textarea.value || "{}");
+      } catch (e) {
+        throw new Error(`Шаг #${idx + 1} (${step.type}): некорректный JSON параметров`);
+      }
+    }
+    return { type: step.type, params };
+  });
+  return steps;
+}
+
+async function savePipeline() {
+  const name = $("pipeline-name").value.trim();
+  if (!name) throw new Error("Укажите название пайплайна");
+  const steps = readStepsFromEditor();
+  if (!steps.length) throw new Error("Добавьте хотя бы один шаг");
+  const payload = {
+    name,
+    group_name: $("pipeline-group").value.trim() || "default",
+    enabled: $("pipeline-enabled").checked,
+    schedule_cron: $("pipeline-cron").value.trim() || null,
+    steps,
+  };
+  const method = editorState.pipelineId ? "PUT" : "POST";
+  const url = editorState.pipelineId ? `/api/pipelines/${editorState.pipelineId}` : "/api/pipelines";
+  const result = await api(url, { method, body: JSON.stringify(payload) });
+  editorState.pipelineId = result.id;
+  toast("Пайплайн сохранён");
+  await loadPipelines();
+}
+
+async function runPipelineNow(pipelineId) {
+  const id = pipelineId ?? editorState.pipelineId;
+  if (!id) throw new Error("Сначала сохраните пайплайн");
+  const data = await api(`/api/pipelines/${id}/run`, { method: "POST", body: "{}" });
+  toast(`Run #${data.run_id}: ${data.status}${data.error ? " · " + data.error : ""}`);
+  await loadPipelines();
+  pageLoaded.delete("runs");
+}
+
+async function editPipeline(pipelineId) {
+  const pipeline = (store.get("pipelines") || []).find((p) => String(p.id) === String(pipelineId));
+  if (!pipeline) {
+    const fresh = await api(`/api/pipelines/${pipelineId}`);
+    openPipelineEditor(fresh);
+  } else {
+    openPipelineEditor(pipeline);
+  }
+}
+
+async function removePipeline(pipelineId) {
+  if (!window.confirm("Удалить пайплайн?")) return;
+  await api(`/api/pipelines/${pipelineId}`, { method: "DELETE" });
+  toast("Удалён");
+  if (String(editorState.pipelineId) === String(pipelineId)) closePipelineEditor();
+  await loadPipelines();
 }
 
 pageLoaders.pipelines = loadPipelines;
 
-// ---- Runs (placeholder for stage B) ---------------------------------------
+// ---- Runs -----------------------------------------------------------------
 
-async function loadRuns() {
-  try {
-    const data = await api("/api/runs");
-    store.set("runs", data.runs || []);
-    renderRuns();
-  } catch (e) {
-    $("runs-list").innerHTML = `<div class="notice">Запуски появятся вместе с пайплайнами. ${escapeHtml(e.message)}</div>`;
+function renderRunsList() {
+  const runs = store.get("runs") || [];
+  if (!runs.length) {
+    $("runs-list").innerHTML = `<div class="notice">Запусков пока нет.</div>`;
+    return;
   }
+  $("runs-list").innerHTML = runs
+    .map((r) => {
+      const duration = r.finished_at && r.started_at
+        ? Math.round((new Date(r.finished_at) - new Date(r.started_at)) / 1000)
+        : null;
+      return `
+        <div class="item">
+          <div>
+            <div class="item-title">
+              #${r.id} · ${escapeHtml(r.pipeline_name || "")}
+              <span class="tag ${statusTagClass(r.status)}">${escapeHtml(r.status)}</span>
+            </div>
+            <div class="item-meta">${escapeHtml(fmtDate(r.started_at))}${duration !== null ? ` · ${duration}с` : ""} · ${escapeHtml(r.trigger || "manual")}${r.error ? ` · ${escapeHtml(r.error)}` : ""}</div>
+          </div>
+          <div class="item-actions">
+            <button type="button" data-run-open="${r.id}">Детали</button>
+          </div>
+        </div>
+      `;
+    })
+    .join("");
 }
 
-function renderRuns() {
-  const runs = store.get("runs") || [];
-  $("runs-list").innerHTML = runs.length
-    ? runs.map((r) => `<div class="item"><div class="item-title">#${r.id} · ${escapeHtml(r.status)}</div><div class="item-meta">${escapeHtml(fmtDate(r.started_at))}</div></div>`).join("")
-    : `<div class="notice">Запусков пока нет.</div>`;
+function populateRunsFilter() {
+  const select = $("runs-filter");
+  const current = select.value;
+  const pipelines = store.get("pipelines") || [];
+  select.innerHTML = `<option value="">Все пайплайны</option>` + pipelines.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  if (current) select.value = current;
+}
+
+async function loadRuns() {
+  if (!(store.get("pipelines") || []).length) {
+    try {
+      const data = await api("/api/pipelines");
+      store.set("pipelines", data.pipelines || []);
+    } catch {
+      /* ignore */
+    }
+  }
+  populateRunsFilter();
+  const filter = $("runs-filter").value;
+  const data = await api(`/api/runs${filter ? `?pipeline_id=${filter}&limit=100` : "?limit=100"}`);
+  store.set("runs", data.runs || []);
+  renderRunsList();
+}
+
+async function openRunDetail(runId) {
+  const detail = await api(`/api/runs/${runId}`);
+  $("run-detail-title").textContent = `Запуск #${detail.id} · ${detail.pipeline_name || ""}`;
+  const stepsHtml = (detail.steps || [])
+    .map((s) => {
+      const dur = s.finished_at && s.started_at ? Math.round((new Date(s.finished_at) - new Date(s.started_at)) / 1000) : "?";
+      return `
+        <details class="step-detail">
+          <summary>
+            #${s.position + 1} · ${escapeHtml(s.type)} ·
+            <span class="tag ${statusTagClass(s.status)}">${escapeHtml(s.status)}</span>
+            · ${dur}с
+            ${s.error ? `· <span class="danger">${escapeHtml(s.error)}</span>` : ""}
+          </summary>
+          <pre class="summary">input: ${escapeHtml(JSON.stringify(s.input || {}, null, 2))}
+output: ${escapeHtml(JSON.stringify(s.output || {}, null, 2))}</pre>
+        </details>
+      `;
+    })
+    .join("");
+  $("run-detail-body").innerHTML = `
+    <div class="item-meta">Старт: ${escapeHtml(fmtDate(detail.started_at))} · Финиш: ${escapeHtml(fmtDate(detail.finished_at))}</div>
+    <div class="item-meta">Триггер: ${escapeHtml(detail.trigger || "manual")}</div>
+    ${detail.error ? `<div class="notice danger">${escapeHtml(detail.error)}</div>` : ""}
+    <pre class="summary">${escapeHtml(JSON.stringify(detail.output || {}, null, 2))}</pre>
+    ${stepsHtml || `<div class="notice">Без шагов.</div>`}
+  `;
+  $("run-detail").hidden = false;
+  $("run-detail").scrollIntoView({ behavior: "smooth" });
 }
 
 pageLoaders.runs = loadRuns;
@@ -1104,9 +1329,40 @@ function wireEvents() {
     renderPrompts();
   });
 
-  // Pipelines / Runs (placeholders)
+  // Pipelines
   $("pipelines-refresh-btn").addEventListener("click", () => reloadPage("pipelines"));
+  $("pipeline-new-btn").addEventListener("click", () => openPipelineEditor(null));
+  $("pipeline-editor-close-btn").addEventListener("click", closePipelineEditor);
+  $("pipeline-add-step-btn").addEventListener("click", addPipelineStep);
+  $("pipeline-save-btn").addEventListener("click", (e) => withBusy(e.target, savePipeline).catch(() => {}));
+  $("pipeline-run-btn").addEventListener("click", (e) => withBusy(e.target, () => runPipelineNow()).catch(() => {}));
+  $("pipeline-steps").addEventListener("click", (event) => {
+    const d = event.target?.dataset || {};
+    if (d.stepRemove !== undefined) {
+      editorState.steps.splice(Number(d.stepRemove), 1);
+      renderStepEditor();
+    } else if (d.stepUp !== undefined) {
+      const i = Number(d.stepUp);
+      if (i > 0) {
+        [editorState.steps[i - 1], editorState.steps[i]] = [editorState.steps[i], editorState.steps[i - 1]];
+        // sync textareas before re-render
+        editorState.steps = readStepsFromEditor();
+        renderStepEditor();
+      }
+    } else if (d.stepDown !== undefined) {
+      const i = Number(d.stepDown);
+      if (i < editorState.steps.length - 1) {
+        [editorState.steps[i], editorState.steps[i + 1]] = [editorState.steps[i + 1], editorState.steps[i]];
+        editorState.steps = readStepsFromEditor();
+        renderStepEditor();
+      }
+    }
+  });
+
+  // Runs
   $("runs-refresh-btn").addEventListener("click", () => reloadPage("runs"));
+  $("runs-filter").addEventListener("change", () => loadRuns().catch((err) => toast(err.message)));
+  $("run-detail-close-btn").addEventListener("click", () => { $("run-detail").hidden = true; });
 
   // News
   $("news-load-btn").addEventListener("click", (e) => withBusy(e.target, loadNews).catch(() => {}));
@@ -1155,6 +1411,10 @@ function wireEvents() {
     else if (d.promptRemove) removePrompt(d.promptRemove).catch((err) => toast(err.message));
     else if (d.modelSelect) selectModel(d.modelSelect).catch((err) => toast(err.message));
     else if (d.modelLoad) loadModel(d.modelLoad).catch((err) => toast(err.message));
+    else if (d.pipelineRun) runPipelineNow(d.pipelineRun).catch((err) => toast(err.message));
+    else if (d.pipelineEdit) editPipeline(d.pipelineEdit).catch((err) => toast(err.message));
+    else if (d.pipelineRemove) removePipeline(d.pipelineRemove).catch((err) => toast(err.message));
+    else if (d.runOpen) openRunDetail(d.runOpen).catch((err) => toast(err.message));
   });
 }
 
