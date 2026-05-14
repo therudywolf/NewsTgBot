@@ -13,6 +13,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -109,6 +110,8 @@ LLM_MODEL_NAME = LM_STUDIO_MODEL
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", str(DATA_DIR / "news_bot.db"))
 CHANNELS_JSON_PATH = os.getenv("CHANNELS_JSON_PATH", str(DATA_DIR / "channels.json"))
+MANAGED_ENV_PATH = os.getenv("MANAGED_ENV_PATH", str(DATA_DIR / "managed.env"))
+ADMIN_HTTPS_ONLY = _bool_env("ADMIN_HTTPS_ONLY", False)
 
 CHECK_INTERVAL_SECONDS = _int_env("CHECK_INTERVAL_SECONDS", 3600)
 AUTO_PARSE_ENABLED = _bool_env("AUTO_PARSE_ENABLED", False)
@@ -185,3 +188,116 @@ def get_auto_parse_limit() -> int:
 
 def get_auto_parse_days() -> int:
     return int(_db_setting("auto_parse_days") or AUTO_PARSE_DAYS)
+
+
+def get_lm_studio_base_url() -> str:
+    return str(_db_setting("lm_studio_base_url") or LM_STUDIO_BASE_URL).strip()
+
+
+def get_lm_studio_model() -> str:
+    return str(_db_setting("lm_studio_model") or LM_STUDIO_MODEL).strip()
+
+
+def get_lm_studio_api_mode() -> str:
+    return str(_db_setting("lm_studio_api_mode") or LM_STUDIO_API_MODE or "native").strip().lower()
+
+
+def get_lm_studio_api_token() -> str:
+    return str(_db_setting("lm_studio_api_token") or LM_STUDIO_API_TOKEN).strip()
+
+
+def get_web_parser_engine() -> str:
+    return str(_db_setting("web_parser_engine") or WEB_PARSER_ENGINE or "playwright").strip().lower()
+
+
+def get_web_parser_headless() -> bool:
+    val = _db_setting("web_parser_headless")
+    if val is not None:
+        return bool(val)
+    return WEB_PARSER_HEADLESS
+
+
+def get_web_parser_timeout() -> int:
+    return int(_db_setting("web_parser_timeout") or WEB_PARSER_TIMEOUT)
+
+
+def get_parser_priority() -> list[str]:
+    value = _db_setting("parser_priority")
+    if isinstance(value, list) and value:
+        return [str(item).strip().lower() for item in value if str(item).strip()]
+    return PARSER_PRIORITY.copy()
+
+
+def get_log_level() -> str:
+    return str(_db_setting("log_level") or os.getenv("LOG_LEVEL", "INFO")).strip().upper()
+
+
+def get_admin_username() -> str:
+    return str(_db_setting("admin_username") or "admin").strip()
+
+
+def get_admin_password_hash() -> str:
+    return str(_db_setting("admin_password_hash") or "").strip()
+
+
+def get_admin_session_secret() -> str:
+    return str(_db_setting("admin_session_secret") or "").strip()
+
+
+def _serialize_env_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        return json.dumps(list(value), ensure_ascii=True)
+    return str(value)
+
+
+def render_runtime_env() -> str:
+    lines = [
+        "# Managed by NewsTgBot admin panel",
+        f"TELEGRAM_BOT_TOKEN={_serialize_env_value(get_bot_token())}",
+        f"TELETHON_API_ID={_serialize_env_value(get_telethon_api_id())}",
+        f"TELETHON_API_HASH={_serialize_env_value(get_telethon_api_hash())}",
+        f"TELETHON_PHONE={_serialize_env_value(get_telethon_phone())}",
+        f"TELETHON_SESSION_FILE={_serialize_env_value(TELETHON_SESSION_FILE)}",
+        "",
+        f"LM_STUDIO_BASE_URL={_serialize_env_value(get_lm_studio_base_url())}",
+        f"LM_STUDIO_API_TOKEN={_serialize_env_value(get_lm_studio_api_token())}",
+        f"LM_STUDIO_MODEL={_serialize_env_value(get_lm_studio_model())}",
+        f"LM_STUDIO_API_MODE={_serialize_env_value(get_lm_studio_api_mode())}",
+        f"LLM_TEMPERATURE={_serialize_env_value(LLM_TEMPERATURE)}",
+        f"LLM_MAX_OUTPUT_TOKENS={_serialize_env_value(LLM_MAX_OUTPUT_TOKENS)}",
+        f"LLM_CONTEXT_LENGTH={_serialize_env_value(LLM_CONTEXT_LENGTH)}",
+        "",
+        f"DATA_DIR={_serialize_env_value(DATA_DIR)}",
+        f"LOGS_DIR={_serialize_env_value(LOGS_DIR)}",
+        f"DATABASE_PATH={_serialize_env_value(DATABASE_PATH)}",
+        f"CHANNELS_JSON_PATH={_serialize_env_value(CHANNELS_JSON_PATH)}",
+        f"MANAGED_ENV_PATH={_serialize_env_value(MANAGED_ENV_PATH)}",
+        f"ADMIN_HTTPS_ONLY={_serialize_env_value(ADMIN_HTTPS_ONLY)}",
+        "",
+        f"AUTO_PARSE_ENABLED={_serialize_env_value(get_auto_parse_enabled())}",
+        f"CHECK_INTERVAL_SECONDS={_serialize_env_value(get_check_interval())}",
+        f"AUTO_PARSE_LIMIT={_serialize_env_value(get_auto_parse_limit())}",
+        f"AUTO_PARSE_DAYS={_serialize_env_value(get_auto_parse_days())}",
+        "",
+        f"PARSER_PRIORITY={_serialize_env_value(get_parser_priority())}",
+        f"RSS_PARSER_TIMEOUT={_serialize_env_value(RSS_PARSER_TIMEOUT)}",
+        f"WEB_PARSER_ENGINE={_serialize_env_value(get_web_parser_engine())}",
+        f"WEB_PARSER_HEADLESS={_serialize_env_value(get_web_parser_headless())}",
+        f"WEB_PARSER_TIMEOUT={_serialize_env_value(get_web_parser_timeout())}",
+        f"LOG_LEVEL={_serialize_env_value(get_log_level())}",
+        "",
+        f"ADMIN_USERNAME={_serialize_env_value(get_admin_username())}",
+    ]
+    return "\n".join(lines).strip() + "\n"
+
+
+def write_runtime_env(path: str | Path | None = None) -> str:
+    target = Path(path or MANAGED_ENV_PATH)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    content = render_runtime_env()
+    target.write_text(content, encoding="utf-8")
+    return str(target)

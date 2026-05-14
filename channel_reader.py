@@ -22,7 +22,17 @@ class ChannelReader:
     def __init__(self, db: database.Database = None):
         """Initialize channel reader."""
         self.db = db or database.Database()
-        self.parser_manager = ParserManager()
+        self.parser_manager = None
+        self._parser_revision = None
+
+    async def _get_parser_manager(self) -> ParserManager:
+        revision = self.db.get_setting("parsers_runtime_revision", "default")
+        if self.parser_manager is None or revision != self._parser_revision:
+            if self.parser_manager is not None:
+                await self.parser_manager.close_all()
+            self.parser_manager = ParserManager()
+            self._parser_revision = revision
+        return self.parser_manager
     
     async def process_channel_message(
         self,
@@ -139,7 +149,8 @@ class ChannelReader:
                     username = username.lstrip('@')
                 
                 # Parse using appropriate parser
-                parse_result = await self.parser_manager.parse_channel(
+                parser_manager = await self._get_parser_manager()
+                parse_result = await parser_manager.parse_channel(
                     username,
                     source_type=source_type,
                     limit=limit,
@@ -203,4 +214,5 @@ class ChannelReader:
         Returns:
             List of available parser type names
         """
-        return await self.parser_manager.get_available_parsers()
+        parser_manager = await self._get_parser_manager()
+        return await parser_manager.get_available_parsers()

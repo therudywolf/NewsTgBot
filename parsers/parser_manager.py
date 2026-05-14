@@ -32,7 +32,7 @@ class ParserManager:
             'web': WebParser
         }
         
-        for parser_type in config.PARSER_PRIORITY:
+        for parser_type in config.get_parser_priority():
             if parser_type in parser_classes:
                 try:
                     parser = parser_classes[parser_type]()
@@ -99,10 +99,10 @@ class ParserManager:
                 parsers_to_try.append(source_type)
             elif fallback:
                 # Try all available parsers as fallback
-                parsers_to_try.extend(config.PARSER_PRIORITY)
+                parsers_to_try.extend(config.get_parser_priority())
         else:
             # Try parsers in priority order
-            parsers_to_try = config.PARSER_PRIORITY.copy()
+            parsers_to_try = config.get_parser_priority().copy()
         
         # Remove duplicates while preserving order
         seen = set()
@@ -174,7 +174,7 @@ class ParserManager:
             if source_type in self.parsers:
                 parsers_to_try.append(source_type)
         else:
-            parsers_to_try = config.PARSER_PRIORITY.copy()
+            parsers_to_try = config.get_parser_priority().copy()
         
         # Try each parser
         for parser_type in parsers_to_try:
@@ -206,4 +206,3 @@ class ParserManager:
                     await parser.close()
             except Exception as e:
                 logger.warning(f"Error closing {parser_type} parser: {e}")
-

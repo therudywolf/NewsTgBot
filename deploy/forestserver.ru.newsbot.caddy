@@ -1,0 +1,7 @@
+forestserver.ru {
+    redir /newsbot /newsbot/ 308
+
+    handle_path /newsbot/* {
+        reverse_proxy news-tg-bot-panel:8000
+    }
+}

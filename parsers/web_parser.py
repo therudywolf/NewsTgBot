@@ -31,12 +31,12 @@ class WebParser(BaseParser):
             return self.browser
         
         try:
-            if config.WEB_PARSER_ENGINE.lower() == 'playwright':
+            if config.get_web_parser_engine() == 'playwright':
                 from playwright.async_api import async_playwright
                 
                 playwright = await async_playwright().start()
                 self.browser = await playwright.chromium.launch(
-                    headless=config.WEB_PARSER_HEADLESS
+                    headless=config.get_web_parser_headless()
                 )
                 self._playwright = playwright
                 self._initialized = True
@@ -51,7 +51,7 @@ class WebParser(BaseParser):
                 from selenium.webdriver.support import expected_conditions as EC
                 
                 options = Options()
-                if config.WEB_PARSER_HEADLESS:
+                if config.get_web_parser_headless():
                     options.add_argument('--headless')
                 options.add_argument('--no-sandbox')
                 options.add_argument('--disable-dev-shm-usage')
@@ -74,7 +74,7 @@ class WebParser(BaseParser):
     async def check_availability(self) -> bool:
         """Check if Web parser is available."""
         try:
-            if config.WEB_PARSER_ENGINE.lower() == 'playwright':
+            if config.get_web_parser_engine() == 'playwright':
                 from playwright.async_api import async_playwright
                 return True
             else:
@@ -113,10 +113,10 @@ class WebParser(BaseParser):
             
             url = self._get_channel_url(channel_username)
             
-            if config.WEB_PARSER_ENGINE.lower() == 'playwright':
+            if config.get_web_parser_engine() == 'playwright':
                 page = await browser.new_page()
                 try:
-                    await page.goto(url, wait_until='networkidle', timeout=config.WEB_PARSER_TIMEOUT * 1000)
+                    await page.goto(url, wait_until='networkidle', timeout=config.get_web_parser_timeout() * 1000)
                     
                     # Extract channel info
                     title = await page.locator('div.tgme_channel_info_header_title').text_content()
@@ -140,7 +140,7 @@ class WebParser(BaseParser):
                 browser.get(url)
                 
                 # Wait for page to load
-                wait = self._selenium_wait(browser, config.WEB_PARSER_TIMEOUT)
+                wait = self._selenium_wait(browser, config.get_web_parser_timeout())
                 title_element = wait.until(
                     self._selenium_ec.presence_of_element_located(
                         (self._selenium_by.CSS_SELECTOR, 'div.tgme_channel_info_header_title')
@@ -206,10 +206,10 @@ class WebParser(BaseParser):
             if days:
                 cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
             
-            if config.WEB_PARSER_ENGINE.lower() == 'playwright':
+            if config.get_web_parser_engine() == 'playwright':
                 page = await browser.new_page()
                 try:
-                    await page.goto(url, wait_until='networkidle', timeout=config.WEB_PARSER_TIMEOUT * 1000)
+                    await page.goto(url, wait_until='networkidle', timeout=config.get_web_parser_timeout() * 1000)
                     
                     # Scroll to load more messages if needed
                     if limit and limit > 20:
@@ -283,7 +283,7 @@ class WebParser(BaseParser):
             else:
                 # Selenium
                 browser.get(url)
-                wait = self._selenium_wait(browser, config.WEB_PARSER_TIMEOUT)
+                wait = self._selenium_wait(browser, config.get_web_parser_timeout())
                 
                 # Scroll to load more if needed
                 if limit and limit > 20:
@@ -367,7 +367,7 @@ class WebParser(BaseParser):
         """Close browser instance."""
         try:
             if self.browser:
-                if config.WEB_PARSER_ENGINE.lower() == 'playwright':
+                if config.get_web_parser_engine() == 'playwright':
                     await self.browser.close()
                     if hasattr(self, '_playwright'):
                         await self._playwright.stop()

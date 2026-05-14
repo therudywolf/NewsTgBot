@@ -10,8 +10,8 @@ Self-hosted IT news aggregator with a web admin panel, Telegram bot, multi-sourc
 
 ## Features
 
-- **Web admin panel** at `http://localhost:8000` — full bot configuration, source management, news viewer, LLM summary
-- **Bot settings from UI** — Telegram Bot API token, Telethon credentials, auto-parse schedule — all configurable and persisted without editing `.env`
+- **Protected web admin panel** at `http://localhost:8000` — first-run admin setup, login, full bot configuration, source management, news viewer, LLM summary
+- **Bot settings from UI** — Telegram Bot API token, Telethon credentials, auto-parse schedule, parser runtime settings — all configurable and persisted without editing `.env`
 - **LM Studio integration** — native `/api/v1` and OpenAI-compatible `/v1` modes for model discovery, loading and chat
 - **Telegram user-account parser** — login via code/2FA, browse your channels, add them in one click
 - **RSS parser** — 23 built-in IT/security/engineering RSS feeds, plus any custom URL
@@ -19,8 +19,8 @@ Self-hosted IT news aggregator with a web admin panel, Telegram bot, multi-sourc
 - **Telegram Bot API worker** — inline keyboard menus, commands, real-time channel post capture
 - **LLM deduplication & aggregation** — automatic duplicate removal and structured news summary in Russian
 - **SQLite storage** — channels, news, tags, sessions, app settings
-- **Docker Compose** — panel + bot as separate services sharing a data volume
-- **`.env` export** — generate a ready-to-use `.env` file from the admin panel
+- **Docker Compose** — panel + bot as separate services sharing `data/` and `logs/`
+- **Managed env snapshot** — panel writes a synced runtime env backup to `data/managed.env`
 
 ## Quick Start
 
@@ -31,10 +31,6 @@ Self-hosted IT news aggregator with a web admin panel, Telegram bot, multi-sourc
 git clone https://github.com/therudywolf/NewsTgBot.git
 cd NewsTgBot
 
-# Copy and edit the example environment file
-cp .env.example .env
-# Edit .env with your tokens if you already have them (optional)
-
 # Create required directories
 mkdir -p data logs
 
@@ -44,11 +40,19 @@ docker compose up --build
 
 Open the admin panel at: **http://localhost:8000**
 
-> ℹ️ The Telegram bot worker starts only when `TELEGRAM_BOT_TOKEN` is set (via `.env` or the web panel). The admin panel works without it.
+On the first visit, create the admin account in the browser. After that, all runtime settings are managed from the panel and mirrored to `data/managed.env`.
+
+> ℹ️ The Telegram bot worker can start with an empty token and will wait until `TELEGRAM_BOT_TOKEN` is configured from the web panel.
+
+For a shared reverse-proxy host, use the server override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --build
+```
 
 ## Configuration
 
-All settings can be entered through the web panel (section **Настройки бота**) and are persisted in the database. The `.env` file serves as an initial default.
+All runtime settings can be entered through the web panel and are persisted in SQLite. Environment variables are optional defaults only.
 
 ### Telegram Bot API
 
@@ -101,10 +105,13 @@ See `.env.example` for all available variables.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/status` | Global stats and config |
+| `GET` | `/api/health` | Public liveness probe for Docker / reverse proxy |
+| `GET` | `/api/status` | Global stats and config (authenticated) |
+| `GET/POST` | `/api/auth/*` | Login / logout / auth status |
+| `GET/POST` | `/api/setup/*` | First-run admin bootstrap |
 | `GET/POST` | `/api/bot-settings` | Read / update bot token, Telethon, auto-parse |
-| `GET/POST` | `/api/settings` | Read / update LM Studio settings |
-| `GET` | `/api/env-export` | Generate `.env` from current config |
+| `GET/POST` | `/api/settings` | Read / update LM Studio and parser runtime settings |
+| `GET/POST` | `/api/env-export`, `/api/env-sync` | View / sync managed runtime env snapshot |
 | `GET/POST` | `/api/lm-studio/models` | List / load / select / test LM Studio models |
 | `GET/POST` | `/api/telegram/*` | Telethon login, channel discovery |
 | `GET/POST/DELETE` | `/api/sources/*` | CRUD for news sources, parse triggers |
@@ -144,8 +151,8 @@ python -m playwright install chromium
 # Start the admin panel
 uvicorn web_app:app --host 0.0.0.0 --port 8000
 
-# In a separate terminal — start the bot (requires TELEGRAM_BOT_TOKEN)
-python bot.py
+# In a separate terminal — start the bot worker wrapper
+python run_bot.py
 ```
 
 ## Tests
@@ -172,7 +179,8 @@ If you run a modified version of NewsTgBot as a networked service, you **must** 
 - RSS and public web pages are used without paid APIs
 - The Telegram user-account parser uses the official MTProto Client API and requires your own `api_id` / `api_hash` from [my.telegram.org](https://my.telegram.org)
 - `.env`, `data/`, logs, SQLite databases and Telethon session files are excluded from git (see `.gitignore`)
-- After changing the bot token in the admin panel, restart the `bot` container to apply changes
+- The admin panel is protected by a local admin account stored in SQLite
+- For reverse-proxy deployment under a subpath such as `/newsbot/`, redirect `/newsbot` -> `/newsbot/` and strip the prefix in the proxy
 - No personal data, API keys, or tokens are committed to the repository
 - All settings are persisted in the SQLite database within the `data/` directory
 

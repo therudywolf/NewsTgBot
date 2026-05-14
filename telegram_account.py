@@ -17,13 +17,26 @@ class TelegramAccountService:
 
     def __init__(self):
         self.client = None
+        self._client_signature = None
 
     def is_configured(self) -> bool:
         return bool(config.get_telethon_api_id() and config.get_telethon_api_hash())
 
+    def _config_signature(self):
+        return (
+            config.get_telethon_api_id(),
+            config.get_telethon_api_hash(),
+            config.TELETHON_SESSION_FILE,
+        )
+
     async def get_client(self):
         if not self.is_configured():
             raise RuntimeError("TELETHON_API_ID and TELETHON_API_HASH are not configured")
+
+        signature = self._config_signature()
+
+        if self.client is not None and signature != self._client_signature:
+            await self.disconnect()
 
         if self.client is not None:
             if not self.client.is_connected():
@@ -38,6 +51,7 @@ class TelegramAccountService:
             config.get_telethon_api_hash(),
         )
         await self.client.connect()
+        self._client_signature = signature
         return self.client
 
     async def status(self) -> Dict[str, Any]:
@@ -136,3 +150,4 @@ class TelegramAccountService:
         if self.client:
             await self.client.disconnect()
             self.client = None
+            self._client_signature = None

@@ -32,10 +32,10 @@ class LLMClient:
         self._api_url_explicit = api_url is not None
         self._api_mode_explicit = api_mode is not None
         self._model_explicit = model_name is not None
-        self.api_url = self._normalize_base_url(api_url or config.LM_STUDIO_BASE_URL)
-        self.model_name = model_name or config.LM_STUDIO_MODEL
-        self.api_token = api_token if api_token is not None else config.LM_STUDIO_API_TOKEN
-        self.api_mode = (api_mode or config.LM_STUDIO_API_MODE or "native").lower()
+        self.api_url = self._normalize_base_url(api_url or config.get_lm_studio_base_url())
+        self.model_name = model_name or config.get_lm_studio_model()
+        self.api_token = api_token if api_token is not None else config.get_lm_studio_api_token()
+        self.api_mode = (api_mode or config.get_lm_studio_api_mode() or "native").lower()
 
     @staticmethod
     def _normalize_base_url(url: str) -> str:
@@ -47,8 +47,9 @@ class LLMClient:
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
-        if self.api_token:
-            headers["Authorization"] = f"Bearer {self.api_token}"
+        token = self._resolve_api_token()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         return headers
 
     def _resolve_model_name(self) -> Optional[str]:
@@ -96,6 +97,19 @@ class LLMClient:
             logger.debug("Could not resolve LM Studio API mode from DB settings: %s", e)
 
         return self.api_mode
+
+    def _resolve_api_token(self) -> str:
+        try:
+            from database import Database
+
+            stored_token = Database().get_setting("lm_studio_api_token")
+            if stored_token:
+                self.api_token = str(stored_token)
+                return self.api_token
+        except Exception as e:
+            logger.debug("Could not resolve LM Studio API token from DB settings: %s", e)
+
+        return self.api_token or ""
 
     async def _request(
         self,

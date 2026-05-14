@@ -1,9 +1,19 @@
 const state = {
   telegramChannels: [],
   defaults: null,
+  auth: null,
 };
 
 const $ = (id) => document.getElementById(id);
+const rootPath = (() => {
+  const path = window.location.pathname;
+  if (!path || path === "/") return "";
+  return path.endsWith("/") ? path.slice(0, -1) : path;
+})();
+
+function apiUrl(path) {
+  return `${rootPath}${path}`;
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -23,7 +33,8 @@ function toast(message) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
+  const response = await fetch(apiUrl(path), {
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     ...options,
   });
@@ -50,6 +61,69 @@ async function withBusy(button, fn) {
   }
 }
 
+function parserPriorityList() {
+  return $("parser-priority").value
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function setShellVisibility(isAppVisible) {
+  $("app-shell").hidden = !isAppVisible;
+  $("auth-shell").style.display = isAppVisible ? "none" : "grid";
+}
+
+function renderAuth(statePayload) {
+  state.auth = statePayload;
+  const configured = !!statePayload.configured;
+  const authenticated = !!statePayload.authenticated;
+
+  $("setup-card").hidden = configured;
+  $("login-card").hidden = !configured || authenticated;
+  setShellVisibility(configured && authenticated);
+
+  if (configured && authenticated) {
+    $("admin-badge").textContent = `admin: ${statePayload.username || "unknown"}`;
+  }
+}
+
+async function loadAuthState() {
+  const auth = await api("/api/auth/status");
+  renderAuth(auth);
+  if (auth.configured && auth.authenticated) {
+    await runAll();
+  }
+}
+
+async function setupAdmin() {
+  const username = $("setup-username").value.trim();
+  const password = $("setup-password").value;
+  if (!username || !password) throw new Error("Заполните логин и пароль");
+  await api("/api/setup", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+  toast("Администратор создан");
+  await loadAuthState();
+}
+
+async function login() {
+  const username = $("login-username").value.trim();
+  const password = $("login-password").value;
+  if (!username || !password) throw new Error("Введите логин и пароль");
+  await api("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+  $("login-password").value = "";
+  await loadAuthState();
+}
+
+async function logout() {
+  await api("/api/auth/logout", { method: "POST", body: "{}" });
+  renderAuth({ configured: true, authenticated: false, username: null });
+}
+
 function renderMetrics(payload) {
   const stats = payload.stats || {};
   const config = payload.config || {};
@@ -57,18 +131,24 @@ function renderMetrics(payload) {
     ["Источники", stats.channels_count ?? 0],
     ["Новости", stats.news_count ?? 0],
     ["Теги", stats.tags_count ?? 0],
-    ["Telegram Bot", config.telegram_bot_configured ? "OK" : "ENV"],
+    ["Telegram Bot", config.telegram_bot_configured ? "OK" : "wait"],
     ["LM Token", config.lm_studio_token_configured ? "OK" : "нет"],
+    ["Env", config.managed_env_path || "-"],
   ];
 
   $("metrics").innerHTML = items
     .map(([label, value]) => `<div class="metric"><strong>${escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></div>`)
     .join("");
 
-  $("status-line").textContent = `БД: ${config.database_path || "-"} · ${payload.time || ""}`;
+  $("status-line").textContent = `БД: ${config.database_path || "-"} · log ${config.log_level || "-"} · ${payload.time || ""}`;
   $("lm-base-url").value = config.lm_studio_base_url || "";
   $("lm-model").value = config.lm_studio_model || "";
   $("lm-api-mode").value = config.lm_studio_api_mode || "native";
+  $("web-parser-engine").value = config.web_parser_engine || "playwright";
+  $("web-parser-headless").checked = !!config.web_parser_headless;
+  $("web-parser-timeout").value = config.web_parser_timeout || 30;
+  $("parser-priority").value = (config.parser_priority || []).join(", ");
+  $("log-level").value = config.log_level || "INFO";
 }
 
 async function loadStatus() {
@@ -102,15 +182,14 @@ async function saveBotSettings() {
   if (apiId) payload.telethon_api_id = apiId;
   const apiHash = $("bot-telethon-api-hash").value.trim();
   if (apiHash) payload.telethon_api_hash = apiHash;
-  const phone = $("bot-telethon-phone").value.trim();
-  payload.telethon_phone = phone;
+  payload.telethon_phone = $("bot-telethon-phone").value.trim();
   payload.auto_parse_enabled = $("bot-auto-parse").checked;
   payload.check_interval_seconds = Number($("bot-interval").value) || 3600;
   payload.auto_parse_limit = Number($("bot-parse-limit").value) || 200;
   payload.auto_parse_days = Number($("bot-parse-days").value) || 7;
 
   await api("/api/bot-settings", { method: "POST", body: JSON.stringify(payload) });
-  toast("Настройки бота сохранены. Перезапустите контейнер bot для применения токена.");
+  toast("Настройки бота сохранены");
   await loadBotSettings();
   await loadStatus();
 }
@@ -118,8 +197,13 @@ async function saveBotSettings() {
 async function exportEnv() {
   const data = await api("/api/env-export");
   const box = $("env-export-box");
-  box.textContent = data.content;
+  box.textContent = `# ${data.path}\n\n${data.content}`;
   box.style.display = box.style.display === "none" ? "block" : "none";
+}
+
+async function syncEnv() {
+  const data = await api("/api/env-sync", { method: "POST", body: "{}" });
+  toast(`env синхронизирован: ${data.path}`);
 }
 
 async function saveSettings() {
@@ -127,13 +211,21 @@ async function saveSettings() {
     lm_studio_base_url: $("lm-base-url").value.trim(),
     lm_studio_model: $("lm-model").value.trim(),
     lm_studio_api_mode: $("lm-api-mode").value,
+    lm_studio_api_token: $("lm-api-token").value.trim(),
+    web_parser_engine: $("web-parser-engine").value,
+    web_parser_headless: $("web-parser-headless").checked,
+    web_parser_timeout: Number($("web-parser-timeout").value) || 30,
+    parser_priority: parserPriorityList(),
+    log_level: $("log-level").value,
   };
-  const data = await api("/api/settings", {
+  await api("/api/settings", {
     method: "POST",
     body: JSON.stringify(payload),
   });
-  $("lm-status").textContent = `Сохранено. Модель: ${data.lm_studio_model || "не выбрана"}`;
+  $("lm-api-token").value = "";
+  $("lm-status").textContent = `Сохранено. Parser order: ${payload.parser_priority.join(", ")}`;
   toast("Настройки сохранены");
+  await loadStatus();
 }
 
 function modelLabel(model) {
@@ -214,7 +306,7 @@ async function loadModel(model) {
 async function refreshTelegramStatus() {
   const data = await api("/api/telegram/status");
   if (!data.configured) {
-    $("tg-status").textContent = "TELETHON_API_ID и TELETHON_API_HASH не заданы в env.";
+    $("tg-status").textContent = "Telethon API ID/hash пока не настроены.";
     return;
   }
   const user = data.user ? `${data.user.first_name || ""} ${data.user.username ? `@${data.user.username}` : ""}`.trim() : "";
@@ -425,10 +517,14 @@ async function summarizeNews() {
 }
 
 function wireEvents() {
+  $("setup-btn").addEventListener("click", (e) => withBusy(e.target, setupAdmin).catch((err) => toast(err.message)));
+  $("login-btn").addEventListener("click", (e) => withBusy(e.target, login).catch((err) => toast(err.message)));
+  $("logout-btn").addEventListener("click", (e) => withBusy(e.target, logout).catch((err) => toast(err.message)));
   $("refresh-btn").addEventListener("click", () => runAll());
   $("bot-settings-refresh-btn").addEventListener("click", () => loadBotSettings().catch((err) => toast(err.message)));
   $("bot-settings-save-btn").addEventListener("click", (e) => withBusy(e.target, saveBotSettings).catch((err) => toast(err.message)));
   $("bot-env-export-btn").addEventListener("click", (e) => withBusy(e.target, exportEnv).catch((err) => toast(err.message)));
+  $("env-sync-btn").addEventListener("click", (e) => withBusy(e.target, syncEnv).catch((err) => toast(err.message)));
   $("settings-save-btn").addEventListener("click", (e) => withBusy(e.target, saveSettings).catch((err) => toast(err.message)));
   $("models-load-btn").addEventListener("click", (e) => withBusy(e.target, loadModels).catch((err) => toast(err.message)));
   $("selected-model-load-btn").addEventListener("click", (e) => withBusy(e.target, async () => {
@@ -482,4 +578,4 @@ async function runAll() {
 }
 
 wireEvents();
-runAll().catch((err) => toast(err.message));
+loadAuthState().catch((err) => toast(err.message));

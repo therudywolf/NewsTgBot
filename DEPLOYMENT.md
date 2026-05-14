@@ -6,7 +6,7 @@ This guide covers deploying NewsTgBot to various environments.
 
 - Docker & Docker Compose 2.0+
 - Domain name (for HTTPS)
-- Telegram bot token (from [@BotFather](https://t.me/BotFather))
+- Telegram bot token (from [@BotFather](https://t.me/BotFather), can be entered later in the web UI)
 - LM Studio instance (for news summarization)
 
 ## Quick Start (Docker Compose)
@@ -17,34 +17,11 @@ This guide covers deploying NewsTgBot to various environments.
 git clone https://github.com/yourusername/NewsTgBot.git
 cd NewsTgBot
 
-# Copy and configure environment
-cp .env.example .env
-nano .env  # Edit with your tokens
-
 # Create data directories
 mkdir -p data logs
 ```
 
-### 2. Configure .env
-
-Required variables:
-
-```env
-# Telegram
-TELEGRAM_BOT_TOKEN=your_token_from_botfather
-
-# Optional: Telethon (for channel parsing)
-TELETHON_API_ID=your_api_id
-TELETHON_API_HASH=your_api_hash
-TELETHON_PHONE=+your_phone
-
-# LLM summarization (optional)
-LM_STUDIO_BASE_URL=http://localhost:1234
-LM_STUDIO_API_TOKEN=your_token
-LM_STUDIO_MODEL=model_name
-```
-
-### 3. Deploy
+### 2. Deploy
 
 ```bash
 # Build and start services
@@ -53,18 +30,15 @@ docker compose up -d
 # Check logs
 docker compose logs -f
 
-# Access admin panel
+# Access admin panel and complete first-run admin setup
 # http://localhost:8000
 ```
 
-### 4. Verify
+### 3. Verify
 
 ```bash
-# Test bot is running
-curl http://localhost:8000/api/status
-
-# Restart bot worker (after token changes)
-docker compose restart bot
+# Public health probe
+curl http://localhost:8000/api/health
 ```
 
 ## Production Deployment
@@ -81,11 +55,32 @@ git clone --branch v1.0.0 https://github.com/yourusername/NewsTgBot.git .
 
 # Setup permissions
 chown -R newstgbot:newstgbot .
-chmod 700 .env data logs
 
 # Create data directories
 mkdir -p data logs
 chmod 755 data logs
+```
+
+### Caddy Reverse Proxy on a Subpath
+
+To publish the panel at `https://forestserver.ru/newsbot/`, keep the app on `127.0.0.1:8000` and strip the `/newsbot` prefix before proxying upstream.
+
+For the shared proxy network used on this server, deploy with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.server.yml up -d --build
+```
+
+```caddyfile
+forestserver.ru {
+    redir /newsbot /newsbot/ 308
+
+    handle_path /newsbot/* {
+        reverse_proxy 127.0.0.1:8000
+    }
+
+    # Keep your other site handlers in the same server block.
+}
 ```
 
 ### SSL/TLS (Nginx Reverse Proxy)
@@ -258,7 +253,7 @@ docker compose up -d
 - [ ] Setup log rotation
 - [ ] Regular backups configured
 - [ ] SSL/TLS certificates valid
-- [ ] `.env` file permissions: `600`
+- [ ] `data/managed.env` permissions: `600` if you use the synced env snapshot
 - [ ] Data directory permissions: `700`
 - [ ] No hardcoded secrets in code
 - [ ] Rate limiting enabled
@@ -336,4 +331,3 @@ REINDEX;
 - 📖 [README](README.md)
 - 🤝 [Contributing](CONTRIBUTING.md)
 - 🐛 [Bug Reports](https://github.com/yourusername/NewsTgBot/issues)
-

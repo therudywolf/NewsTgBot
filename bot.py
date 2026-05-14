@@ -8,6 +8,7 @@ it under the terms of the GNU Affero General Public License as published
 by the Free Software Foundation, either version 3 of the License.
 See LICENSE file for details.
 """
+import asyncio
 import json
 import logging
 import os
@@ -27,6 +28,10 @@ from source_identity import stable_source_id
 logger = logging.getLogger(__name__)
 
 
+class RestartRequested(RuntimeError):
+    """Raised when the bot runtime should restart to apply new config."""
+
+
 class NewsBot:
     """Main bot class."""
     
@@ -39,6 +44,9 @@ class NewsBot:
         self.scheduler = scheduler.Scheduler()
         self.app = None
         self.default_sources = self._load_default_sources()
+        self.runtime_watch_task = None
+        self.runtime_token = None
+        self.restart_requested = False
     
     def _load_default_sources(self) -> Dict:
         """Load default sources from JSON file."""
@@ -1375,20 +1383,51 @@ class NewsBot:
                 logger.error(f"Error parsing channel {channel.get('channel_id')}: {e}")
                 total['errors'] += 1
         logger.info(f"Periodic parsing finished: {total}")
+
+    async def watch_runtime_config(self):
+        """Apply dynamic config updates and request restart when needed."""
+        while True:
+            try:
+                token = config.get_bot_token()
+                if token != self.runtime_token:
+                    logger.info("Bot token changed, scheduling restart")
+                    self.restart_requested = True
+                    if self.app is not None:
+                        self.app.stop_running()
+                    return
+
+                auto_parse_enabled = config.get_auto_parse_enabled()
+                if auto_parse_enabled and not self.scheduler.running:
+                    logger.info("Auto-parse enabled from runtime settings")
+                    self.scheduler.start(self.periodic_check)
+                elif not auto_parse_enabled and self.scheduler.running:
+                    logger.info("Auto-parse disabled from runtime settings")
+                    self.scheduler.stop()
+            except Exception as e:
+                logger.error("Error while applying runtime config: %s", e, exc_info=True)
+
+            await asyncio.sleep(10)
     
     def run(self):
         """Run the bot."""
         token = config.get_bot_token()
         if not token:
             raise RuntimeError("TELEGRAM_BOT_TOKEN is not set. Configure it via the admin panel or .env file.")
+        self.runtime_token = token
+        self.restart_requested = False
 
         async def post_init(application):
             if config.get_auto_parse_enabled():
                 self.scheduler.start(self.periodic_check)
+            self.runtime_watch_task = asyncio.create_task(self.watch_runtime_config())
 
         async def post_shutdown(application):
             self.scheduler.stop()
-            await self.channel_reader.parser_manager.close_all()
+            if self.runtime_watch_task:
+                self.runtime_watch_task.cancel()
+                self.runtime_watch_task = None
+            if self.channel_reader.parser_manager is not None:
+                await self.channel_reader.parser_manager.close_all()
 
         # Create application
         self.app = (
@@ -1449,9 +1488,10 @@ class NewsBot:
         # Run bot
         logger.info("Bot is starting...")
         self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+        if self.restart_requested:
+            raise RestartRequested("Bot restart requested after config change")
 
 
 if __name__ == "__main__":
     bot = NewsBot()
     bot.run()
-
