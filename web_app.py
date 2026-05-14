@@ -42,13 +42,6 @@ channel_reader = ChannelReader(db)
 telegram_account = TelegramAccountService()
 
 app = FastAPI(title="NewsTgBot Admin", version="0.2.0")
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=ensure_session_secret(db),
-    same_site="lax",
-    https_only=config.ADMIN_HTTPS_ONLY,
-    max_age=60 * 60 * 12,
-)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 PUBLIC_PATHS = {
@@ -263,6 +256,19 @@ async def admin_auth_middleware(request: Request, call_next):
         )
 
     return await call_next(request)
+
+
+# SessionMiddleware must be added AFTER @app.middleware("http") decorators.
+# Starlette applies middleware in LIFO order, so the last-added middleware
+# becomes outermost (runs first). SessionMiddleware needs to wrap auth middleware
+# so the session scope is populated before _is_authenticated is called.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=ensure_session_secret(db),
+    same_site="lax",
+    https_only=config.ADMIN_HTTPS_ONLY,
+    max_age=60 * 60 * 12,
+)
 
 
 @app.get("/")
