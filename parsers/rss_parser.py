@@ -128,6 +128,55 @@ class RSSParser(BaseParser):
             logger.error(f"Error getting RSS channel info: {e}")
             return None
     
+    @staticmethod
+    def _extract_media(entry, summary_html: str) -> List[Dict[str, Any]]:
+        """Pull image URLs from an RSS entry.
+
+        Walks the common feedparser fields (media_content, media_thumbnail,
+        enclosures, links) and falls back to scraping the first <img src="">
+        out of the summary HTML if the feed gives us no explicit media.
+        """
+        import re
+        seen = set()
+        media: List[Dict[str, Any]] = []
+
+        def _add(url: str, mime: Optional[str] = None):
+            if not url:
+                return
+            url = url.strip()
+            if not url or url in seen:
+                return
+            seen.add(url)
+            media.append({"kind": "image", "url": url, "mime": mime})
+
+        for item in entry.get("media_content", []) or []:
+            url = item.get("url") if isinstance(item, dict) else getattr(item, "url", None)
+            mime = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+            if url and (not mime or mime.startswith("image/")):
+                _add(url, mime)
+
+        for thumb in entry.get("media_thumbnail", []) or []:
+            url = thumb.get("url") if isinstance(thumb, dict) else getattr(thumb, "url", None)
+            _add(url, "image")
+
+        for enc in entry.get("enclosures", []) or []:
+            url = enc.get("url") if isinstance(enc, dict) else getattr(enc, "href", None)
+            mime = enc.get("type") if isinstance(enc, dict) else getattr(enc, "type", None)
+            if url and (not mime or mime.startswith("image/")):
+                _add(url, mime)
+
+        for link in entry.get("links", []) or []:
+            if isinstance(link, dict) and link.get("rel") == "enclosure":
+                if (link.get("type") or "").startswith("image/"):
+                    _add(link.get("href"), link.get("type"))
+
+        if not media and summary_html:
+            match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', summary_html, re.IGNORECASE)
+            if match:
+                _add(match.group(1))
+
+        return media
+
     async def parse_channel(
         self,
         channel_username: str,
@@ -195,6 +244,8 @@ class RSSParser(BaseParser):
                     summary = entry.get('summary') or entry.get('description') or ''
                     link = entry.get('link', '').strip()
 
+                    media = self._extract_media(entry, summary)
+
                     # Clean HTML tags if present
                     import re
                     summary = re.sub(r'<[^>]+>', '', summary).strip()
@@ -221,7 +272,8 @@ class RSSParser(BaseParser):
                         'message_id': message_id,
                         'text': text,
                         'date': self._format_date(entry_date),
-                        'channel_id': channel_id
+                        'channel_id': channel_id,
+                        'media': media,
                     }
                     
                     result['messages'].append(msg_dict)

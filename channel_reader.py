@@ -176,9 +176,19 @@ class ChannelReader:
                             msg['text'],
                             msg['date']
                         )
-                        
+
                         if news_id:
                             stats['parsed'] += 1
+                            for media_item in (msg.get('media') or []):
+                                try:
+                                    self.db.add_news_media(
+                                        news_id=news_id,
+                                        url=media_item.get('url'),
+                                        kind=media_item.get('kind', 'image'),
+                                        mime=media_item.get('mime'),
+                                    )
+                                except Exception as media_exc:
+                                    logger.debug("media store failed: %s", media_exc)
                         else:
                             stats['skipped'] += 1
                     except Exception as e:

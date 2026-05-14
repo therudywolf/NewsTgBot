@@ -261,18 +261,33 @@ class WebParser(BaseParser):
                             else:
                                 message_id = stable_source_id(f"{text}{msg_date}", "web-message")
                             
+                            # Pull the first photo from the t.me/s widget:
+                            # tgme_widget_message_photo_wrap exposes the image
+                            # URL in its background-image style.
+                            media: List[Dict[str, Any]] = []
+                            try:
+                                photo_locator = msg_element.locator('a.tgme_widget_message_photo_wrap').first
+                                if await photo_locator.count():
+                                    style = await photo_locator.get_attribute('style') or ""
+                                    match = re.search(r"url\(['\"]?([^'\")]+)['\"]?\)", style)
+                                    if match:
+                                        media.append({"kind": "image", "url": match.group(1)})
+                            except Exception:
+                                pass
+
                             # Format message
                             msg_dict = {
                                 'message_id': message_id,
                                 'text': text,
                                 'date': self._format_date(msg_date),
-                                'channel_id': channel_id
+                                'channel_id': channel_id,
+                                'media': media,
                             }
-                            
+
                             result['messages'].append(msg_dict)
                             result['parsed'] += 1
                             messages_fetched += 1
-                            
+
                         except Exception as e:
                             logger.error(f"Error processing web message: {e}")
                             result['errors'] += 1

@@ -174,12 +174,35 @@ class TelethonParser(BaseParser):
                         result['skipped'] += 1
                         continue
                     
+                    # Capture image attachments by Telegram file id; the
+                    # channel_reader will resolve these via download_media
+                    # when a pipeline actually needs the picture.
+                    media: List[Dict[str, Any]] = []
+                    if getattr(message, "photo", None):
+                        media.append({
+                            "kind": "image",
+                            "url": None,
+                            "telegram_message_id": message.id,
+                            "telegram_channel_id": channel_id,
+                        })
+                    elif getattr(message, "document", None):
+                        mime = getattr(message.document, "mime_type", "") or ""
+                        if mime.startswith("image/"):
+                            media.append({
+                                "kind": "image",
+                                "url": None,
+                                "mime": mime,
+                                "telegram_message_id": message.id,
+                                "telegram_channel_id": channel_id,
+                            })
+
                     # Format message
                     msg_dict = {
                         'message_id': message.id,
                         'text': text,
                         'date': self._format_date(message.date),
-                        'channel_id': channel_id
+                        'channel_id': channel_id,
+                        'media': media,
                     }
                     
                     result['messages'].append(msg_dict)
