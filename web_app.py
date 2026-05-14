@@ -32,6 +32,7 @@ from channel_reader import ChannelReader
 from database import Database
 from deduplicator import Deduplicator
 from llm_client import LLMClient
+import poster
 from source_identity import stable_source_id
 from telegram_account import TelegramAccountService
 
@@ -191,6 +192,45 @@ class DefaultSourcePayload(BaseModel):
 
 class SummaryPayload(BaseModel):
     days: int = Field(default=1, ge=1, le=365)
+
+
+class BotPayload(BaseModel):
+    label: str = Field(min_length=1, max_length=128)
+    kind: str = Field(default="bot_api", pattern="^(bot_api|telethon)$")
+    token: Optional[str] = None
+    default_chat_id: Optional[str] = None
+    enabled: Optional[bool] = True
+
+
+class BotUpdatePayload(BaseModel):
+    label: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    kind: Optional[str] = Field(default=None, pattern="^(bot_api|telethon)$")
+    token: Optional[str] = None
+    default_chat_id: Optional[str] = None
+    enabled: Optional[bool] = None
+
+
+class PromptPayload(BaseModel):
+    task: str = Field(pattern="^(dedup|summary|tags|repost)$")
+    name: str = Field(min_length=1, max_length=128)
+    system_prompt: str = Field(min_length=1, max_length=8000)
+    user_template: str = Field(min_length=1, max_length=12000)
+    is_active: bool = False
+
+
+class PostingPreviewPayload(BaseModel):
+    news_ids: Optional[List[int]] = None
+    days: Optional[int] = Field(default=None, ge=1, le=365)
+    instruction: Optional[str] = Field(default=None, max_length=2000)
+    prompt_name: Optional[str] = Field(default=None, max_length=128)
+
+
+class PostingSendPayload(BaseModel):
+    bot_id: int = Field(ge=1)
+    text: str = Field(min_length=1, max_length=4096)
+    chat_id: Optional[str] = Field(default=None, max_length=128)
+    parse_mode: Optional[str] = Field(default=None, pattern="^(Markdown|MarkdownV2|HTML)$")
+    disable_web_page_preview: bool = True
 
 
 def _mask_token(token: str) -> str:
@@ -708,10 +748,251 @@ async def summarize_news(payload: SummaryPayload):
     return {"summary": summary, "input_count": len(rows), "unique_count": len(unique)}
 
 
+# ---- Posting bots ---------------------------------------------------------
+
+
+def _safe_bot(record: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop the raw token from a bot record before returning it to the UI."""
+    out = {k: v for k, v in record.items() if k != "token"}
+    out["token_masked"] = _mask_token(record.get("token") or "")
+    return out
+
+
+@app.get("/api/posting/bots")
+async def list_posting_bots():
+    return {"bots": [_safe_bot(item) for item in db.list_bots()]}
+
+
+@app.post("/api/posting/bots")
+async def create_posting_bot(payload: BotPayload):
+    bot_id = db.create_bot(
+        label=payload.label.strip(),
+        kind=payload.kind,
+        token=(payload.token or "").strip() or None,
+        default_chat_id=(payload.default_chat_id or "").strip() or None,
+        enabled=bool(payload.enabled),
+    )
+    return _safe_bot(db.get_bot(bot_id))
+
+
+@app.patch("/api/posting/bots/{bot_id}")
+async def update_posting_bot(bot_id: int, payload: BotUpdatePayload):
+    updates = payload.model_dump(exclude_unset=True)
+    if "token" in updates and updates["token"] is not None:
+        updates["token"] = updates["token"].strip() or None
+    if "default_chat_id" in updates and updates["default_chat_id"] is not None:
+        updates["default_chat_id"] = updates["default_chat_id"].strip() or None
+    if not db.update_bot(bot_id, **updates):
+        raise HTTPException(status_code=404, detail="Bot not found")
+    return _safe_bot(db.get_bot(bot_id))
+
+
+@app.delete("/api/posting/bots/{bot_id}")
+async def delete_posting_bot(bot_id: int):
+    return {"removed": db.delete_bot(bot_id)}
+
+
+# ---- LLM prompts ----------------------------------------------------------
+
+
+@app.get("/api/prompts")
+async def get_prompts(task: Optional[str] = None):
+    if task and task not in {"dedup", "summary", "tags", "repost"}:
+        raise HTTPException(status_code=400, detail="Unknown task")
+    return {"prompts": db.list_prompts(task=task)}
+
+
+@app.post("/api/prompts")
+async def upsert_prompt(payload: PromptPayload):
+    prompt_id = db.upsert_prompt(
+        task=payload.task,
+        name=payload.name.strip(),
+        system_prompt=payload.system_prompt,
+        user_template=payload.user_template,
+        is_active=payload.is_active,
+    )
+    return {"id": prompt_id, "prompt": next(
+        (p for p in db.list_prompts(task=payload.task) if p["id"] == prompt_id),
+        None,
+    )}
+
+
+@app.post("/api/prompts/{prompt_id}/activate")
+async def activate_prompt(prompt_id: int):
+    if not db.set_active_prompt(prompt_id):
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    return {"ok": True}
+
+
+@app.delete("/api/prompts/{prompt_id}")
+async def delete_prompt(prompt_id: int):
+    return {"removed": db.delete_prompt(prompt_id)}
+
+
+# ---- Posting --------------------------------------------------------------
+
+
+def _collect_news_for_post(payload: PostingPreviewPayload) -> List[Dict[str, Any]]:
+    if payload.news_ids:
+        items: List[Dict[str, Any]] = []
+        # Reuse the period query so we get joined channel info, then filter.
+        end = datetime.now()
+        start = end - timedelta(days=365 * 5)
+        wanted = set(int(x) for x in payload.news_ids)
+        for row in db.get_news_by_period(start.isoformat(), end.isoformat()):
+            if row["id"] in wanted:
+                items.append(row)
+        return items
+    days = payload.days or 1
+    end = datetime.now()
+    start = end - timedelta(days=days)
+    return db.get_news_by_period(start.isoformat(), end.isoformat())
+
+
+@app.post("/api/posting/preview")
+async def posting_preview(payload: PostingPreviewPayload):
+    rows = _collect_news_for_post(payload)
+    if not rows:
+        raise HTTPException(status_code=400, detail="No news to use for the post")
+    unique = await Deduplicator(_llm_client()).deduplicate(rows)
+    text = await _llm_client().rewrite_post(
+        unique,
+        instruction=payload.instruction,
+        prompt_name=payload.prompt_name,
+    )
+    if not text:
+        raise HTTPException(status_code=502, detail="LLM did not return any text")
+    return {
+        "text": text,
+        "input_count": len(rows),
+        "unique_count": len(unique),
+    }
+
+
+@app.post("/api/posting/send")
+async def posting_send(payload: PostingSendPayload):
+    bot = db.get_bot(payload.bot_id)
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    if not bot.get("enabled"):
+        raise HTTPException(status_code=400, detail="Bot is disabled")
+
+    chat_id = (payload.chat_id or bot.get("default_chat_id") or "").strip()
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="Target chat id is required")
+
+    try:
+        if bot["kind"] == "bot_api":
+            result = await poster.send_via_bot_api(
+                token=bot.get("token") or "",
+                chat_id=chat_id,
+                text=payload.text,
+                parse_mode=payload.parse_mode,
+                disable_web_page_preview=payload.disable_web_page_preview,
+            )
+        else:
+            result = await poster.send_via_telethon(
+                telegram_account_service=telegram_account,
+                chat_id=chat_id,
+                text=payload.text,
+                link_preview=not payload.disable_web_page_preview,
+            )
+    except poster.PostingError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"sent": True, "result": result, "bot_id": bot["id"], "chat_id": chat_id}
+
+
+_DEFAULT_PROMPTS = [
+    {
+        "task": "dedup",
+        "name": "default",
+        "system_prompt": (
+            "Ты помощник для удаления дубликатов IT-новостей. "
+            "Найди уникальные сообщения и верни ТОЛЬКО JSON массив их номеров, "
+            "например: [1, 3, 5]. Никакого другого текста."
+        ),
+        "user_template": (
+            "Проанализируй список новостей и верни JSON массив номеров уникальных:\n\n"
+            "{news}\n\nОтвет — только JSON массив."
+        ),
+    },
+    {
+        "task": "summary",
+        "name": "default",
+        "system_prompt": (
+            "Ты редактор IT-новостей. Делай краткую структурированную сводку: "
+            "группируй похожие события, убирай повторы, сохраняй факты и источники. "
+            "Пиши на русском, без рекламы."
+        ),
+        "user_template": (
+            "Сделай сводку новостей за период {period}:\n\n{news}\n\n"
+            "Формат:\n1. Короткий заголовок\n2. 1-3 предложения с сутью\n"
+            "3. Источники в скобках, если есть."
+        ),
+    },
+    {
+        "task": "tags",
+        "name": "default",
+        "system_prompt": (
+            "Ты помощник для генерации тегов. Верни только JSON массив из 3-5 "
+            "коротких тегов на русском."
+        ),
+        "user_template": "Проанализируй новость и сгенерируй теги:\n\n{news}",
+    },
+    {
+        "task": "repost",
+        "name": "default",
+        "system_prompt": (
+            "Ты редактор IT-канала в Telegram. Сделай из подборки один компактный пост: "
+            "1-3 абзаца, фактично, без воды. Эмодзи в начале каждой темы. "
+            "В конце отдельной строкой — источники через запятую."
+        ),
+        "user_template": (
+            "Подборка новостей:\n\n{news}\n\n"
+            "Дополнительная инструкция от редактора: {instruction}"
+        ),
+    },
+    {
+        "task": "repost",
+        "name": "short_announce",
+        "system_prompt": (
+            "Ты пишешь сжатые анонсы для IT-канала. Один пост — одна главная мысль, "
+            "до 500 знаков. Без эмодзи. Финальная строка — источник."
+        ),
+        "user_template": "Выбери самую важную новость и сделай короткий анонс:\n\n{news}",
+    },
+]
+
+
+def _seed_default_prompts() -> None:
+    """Insert default prompt variants on first run.
+
+    Existing entries are left untouched; the active flag is only set when
+    there is no active prompt for the task yet.
+    """
+    for entry in _DEFAULT_PROMPTS:
+        existing = next(
+            (p for p in db.list_prompts(task=entry["task"]) if p["name"] == entry["name"]),
+            None,
+        )
+        if existing:
+            continue
+        active_now = db.get_active_prompt(entry["task"]) is None and entry["name"] == "default"
+        db.upsert_prompt(
+            task=entry["task"],
+            name=entry["name"],
+            system_prompt=entry["system_prompt"],
+            user_template=entry["user_template"],
+            is_active=active_now,
+        )
+
+
 @app.on_event("startup")
 async def startup_event():
     _apply_log_level()
     _write_runtime_env()
+    _seed_default_prompts()
 
 
 @app.on_event("shutdown")

@@ -141,7 +141,7 @@
             </label>
             <label>
               Selected model
-              <input id="lm-model" autocomplete="off" placeholder="model key" />
+              <select id="lm-model"><option value="">— загрузите модели —</option></select>
             </label>
             <label>
               Load context
@@ -255,6 +255,129 @@
             <button id="defaults-refresh-btn" type="button">Обновить</button>
           </div>
           <div id="default-sources" class="list compact"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="bots-title">
+          <div class="panel-head">
+            <h2 id="bots-title">Боты для постинга</h2>
+            <button id="bots-refresh-btn" type="button">Обновить</button>
+          </div>
+          <p class="auth-copy">
+            Bot API — обычный Telegram-бот (нужен токен от @BotFather).
+            Telethon — публикация от твоей учётки (нужен авторизованный аккаунт сверху).
+          </p>
+          <div class="form-grid">
+            <label>
+              Название
+              <input id="new-bot-label" placeholder="MyChannelPoster" />
+            </label>
+            <label>
+              Тип
+              <select id="new-bot-kind">
+                <option value="bot_api">Bot API</option>
+                <option value="telethon">Telethon (учётка)</option>
+              </select>
+            </label>
+            <label>
+              Token (для Bot API)
+              <input id="new-bot-token" type="password" autocomplete="off" placeholder="123456:ABC..." />
+            </label>
+            <label>
+              Default chat id / @username
+              <input id="new-bot-chat" placeholder="@channel или -1001..." />
+            </label>
+          </div>
+          <div class="button-row">
+            <button id="new-bot-add-btn" type="button">Добавить бота</button>
+          </div>
+          <div id="bots-list" class="list"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="prompts-title">
+          <div class="panel-head">
+            <h2 id="prompts-title">Промпты под задачи</h2>
+            <button id="prompts-refresh-btn" type="button">Обновить</button>
+          </div>
+          <p class="auth-copy">
+            Доступные плейсхолдеры: <code>{news}</code>, <code>{period}</code>, <code>{instruction}</code>.
+            Активный промпт в задаче используется автоматически.
+          </p>
+          <div class="form-grid">
+            <label>
+              Задача
+              <select id="new-prompt-task">
+                <option value="repost">repost (пост в канал)</option>
+                <option value="summary">summary (сводка)</option>
+                <option value="dedup">dedup (удаление дублей)</option>
+                <option value="tags">tags (теги)</option>
+              </select>
+            </label>
+            <label>
+              Название
+              <input id="new-prompt-name" placeholder="snarky, formal, ..." />
+            </label>
+            <label class="check-label">
+              <input id="new-prompt-active" type="checkbox" checked />
+              Сделать активным
+            </label>
+          </div>
+          <label>
+            System prompt
+            <textarea id="new-prompt-system" rows="3" placeholder="Ты редактор..."></textarea>
+          </label>
+          <label>
+            User template
+            <textarea id="new-prompt-user" rows="4" placeholder="Подборка: {news}\nИнструкция: {instruction}"></textarea>
+          </label>
+          <div class="button-row">
+            <button id="new-prompt-save-btn" type="button">Сохранить промпт</button>
+          </div>
+          <div id="prompts-list" class="list"></div>
+        </section>
+
+        <section class="panel span-2" aria-labelledby="posting-title">
+          <div class="panel-head">
+            <h2 id="posting-title">Публикация поста</h2>
+            <div class="inline-controls">
+              <input id="post-days" type="number" min="1" max="30" value="1" />
+              <button id="post-preview-btn" type="button">Сгенерировать</button>
+            </div>
+          </div>
+          <div class="form-grid">
+            <label>
+              Бот
+              <select id="post-bot"><option value="">— нет ботов —</option></select>
+            </label>
+            <label>
+              Chat id (опционально)
+              <input id="post-chat" placeholder="@channel или -1001..." />
+            </label>
+            <label>
+              Стиль (имя промпта)
+              <input id="post-style" placeholder="default" />
+            </label>
+            <label>
+              Parse mode
+              <select id="post-parse-mode">
+                <option value="">none</option>
+                <option value="HTML">HTML</option>
+                <option value="Markdown">Markdown</option>
+                <option value="MarkdownV2">MarkdownV2</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            Доп. инструкция редактору
+            <textarea id="post-instruction" rows="2" placeholder="например: добавь призыв подписаться"></textarea>
+          </label>
+          <label>
+            Текст поста
+            <textarea id="post-text" rows="8" placeholder="Сначала нажми «Сгенерировать», потом отредактируй и «Опубликовать»."></textarea>
+          </label>
+          <div class="button-row">
+            <button id="post-send-btn" type="button">Опубликовать</button>
+          </div>
+          <div id="post-status" class="notice"></div>
         </section>
 
         <section class="panel span-2" aria-labelledby="news-title">

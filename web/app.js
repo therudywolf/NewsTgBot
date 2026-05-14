@@ -2,6 +2,9 @@ const state = {
   telegramChannels: [],
   defaults: null,
   auth: null,
+  models: [],
+  bots: [],
+  prompts: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -142,7 +145,15 @@ function renderMetrics(payload) {
 
   $("status-line").textContent = `БД: ${config.database_path || "-"} · log ${config.log_level || "-"} · ${payload.time || ""}`;
   $("lm-base-url").value = config.lm_studio_base_url || "";
-  $("lm-model").value = config.lm_studio_model || "";
+  const modelSelect = $("lm-model");
+  const desiredModel = config.lm_studio_model || "";
+  if (desiredModel && !Array.from(modelSelect.options).some((o) => o.value === desiredModel)) {
+    const opt = document.createElement("option");
+    opt.value = desiredModel;
+    opt.textContent = desiredModel;
+    modelSelect.appendChild(opt);
+  }
+  modelSelect.value = desiredModel;
   $("lm-api-mode").value = config.lm_studio_api_mode || "native";
   $("web-parser-engine").value = config.web_parser_engine || "playwright";
   $("web-parser-headless").checked = !!config.web_parser_headless;
@@ -209,7 +220,7 @@ async function syncEnv() {
 async function saveSettings() {
   const payload = {
     lm_studio_base_url: $("lm-base-url").value.trim(),
-    lm_studio_model: $("lm-model").value.trim(),
+    lm_studio_model: $("lm-model").value,
     lm_studio_api_mode: $("lm-api-mode").value,
     lm_studio_api_token: $("lm-api-token").value.trim(),
     web_parser_engine: $("web-parser-engine").value,
@@ -237,6 +248,28 @@ function modelKey(model) {
 }
 
 function renderModels(models) {
+  state.models = models;
+  const select = $("lm-model");
+  const current = select.value;
+  const llms = models.filter((model) => (model.type || "llm") === "llm");
+  if (!llms.length) {
+    select.innerHTML = `<option value="">— нет моделей —</option>`;
+  } else {
+    select.innerHTML = llms
+      .map((model) => {
+        const key = modelKey(model);
+        const loaded = Array.isArray(model.loaded_instances) && model.loaded_instances.length > 0;
+        const meta = [model.params_string, model.quantization?.name].filter(Boolean).join(" ");
+        const suffix = [loaded ? "loaded" : "", meta].filter(Boolean).join(" · ");
+        const label = `${modelLabel(model)}${suffix ? ` — ${suffix}` : ""}`;
+        return `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`;
+      })
+      .join("");
+    if (current && llms.some((m) => modelKey(m) === current)) {
+      select.value = current;
+    }
+  }
+
   if (!models.length) {
     $("models-list").innerHTML = `<div class="notice">Сервер вернул пустой список моделей.</div>`;
     return;
@@ -516,6 +549,209 @@ async function summarizeNews() {
   $("summary-box").textContent = `Новостей: ${data.input_count}, после дедупликации: ${data.unique_count}\n\n${data.summary}`;
 }
 
+// ---- Posting bots ----------------------------------------------------------
+
+function renderBots(bots) {
+  state.bots = bots;
+
+  const select = $("post-bot");
+  if (!bots.length) {
+    select.innerHTML = `<option value="">— нет ботов —</option>`;
+  } else {
+    select.innerHTML = bots
+      .map((bot) => {
+        const label = `${bot.label} (${bot.kind}${bot.enabled ? "" : ", off"})`;
+        return `<option value="${bot.id}">${escapeHtml(label)}</option>`;
+      })
+      .join("");
+  }
+
+  if (!bots.length) {
+    $("bots-list").innerHTML = `<div class="notice">Боты пока не добавлены.</div>`;
+    return;
+  }
+
+  $("bots-list").innerHTML = bots
+    .map((bot) => `
+      <div class="item">
+        <div>
+          <div class="item-title">${escapeHtml(bot.label)} <span class="tag">${escapeHtml(bot.kind)}</span></div>
+          <div class="item-meta">
+            chat: ${escapeHtml(bot.default_chat_id || "—")} · token: ${escapeHtml(bot.token_masked || "—")}
+            · ${bot.enabled ? "enabled" : "disabled"}
+          </div>
+        </div>
+        <div class="item-actions">
+          <button type="button" data-bot-toggle="${bot.id}">${bot.enabled ? "Off" : "On"}</button>
+          <button type="button" data-bot-edit-token="${bot.id}">Token</button>
+          <button type="button" data-bot-edit-chat="${bot.id}">Chat</button>
+          <button type="button" data-bot-remove="${bot.id}" class="danger">Удалить</button>
+        </div>
+      </div>
+    `)
+    .join("");
+}
+
+async function loadBots() {
+  const data = await api("/api/posting/bots");
+  renderBots(data.bots || []);
+}
+
+async function addBot() {
+  const label = $("new-bot-label").value.trim();
+  if (!label) throw new Error("Укажите название");
+  const payload = {
+    label,
+    kind: $("new-bot-kind").value,
+    token: $("new-bot-token").value.trim() || undefined,
+    default_chat_id: $("new-bot-chat").value.trim() || undefined,
+  };
+  await api("/api/posting/bots", { method: "POST", body: JSON.stringify(payload) });
+  $("new-bot-label").value = "";
+  $("new-bot-token").value = "";
+  $("new-bot-chat").value = "";
+  toast("Бот добавлен");
+  await loadBots();
+}
+
+async function toggleBot(id) {
+  const bot = state.bots.find((b) => String(b.id) === String(id));
+  if (!bot) return;
+  await api(`/api/posting/bots/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ enabled: !bot.enabled }),
+  });
+  await loadBots();
+}
+
+async function patchBotPrompt(id, field) {
+  const current = state.bots.find((b) => String(b.id) === String(id));
+  const initial = field === "token" ? "" : current?.default_chat_id || "";
+  const value = window.prompt(field === "token" ? "Новый токен:" : "Default chat id:", initial);
+  if (value === null) return;
+  const body = field === "token" ? { token: value } : { default_chat_id: value };
+  await api(`/api/posting/bots/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+  toast("Сохранено");
+  await loadBots();
+}
+
+async function removeBot(id) {
+  if (!window.confirm("Удалить бота?")) return;
+  await api(`/api/posting/bots/${id}`, { method: "DELETE" });
+  toast("Бот удалён");
+  await loadBots();
+}
+
+// ---- Prompts ---------------------------------------------------------------
+
+function renderPrompts(prompts) {
+  state.prompts = prompts;
+  if (!prompts.length) {
+    $("prompts-list").innerHTML = `<div class="notice">Промпты пока не настроены.</div>`;
+    return;
+  }
+  $("prompts-list").innerHTML = prompts
+    .map((p) => `
+      <div class="item">
+        <div>
+          <div class="item-title">
+            ${escapeHtml(p.task)} · ${escapeHtml(p.name)}
+            ${p.is_active ? '<span class="tag loaded">active</span>' : ""}
+          </div>
+          <div class="item-meta">${escapeHtml((p.system_prompt || "").slice(0, 140))}…</div>
+        </div>
+        <div class="item-actions">
+          ${p.is_active ? "" : `<button type="button" data-prompt-activate="${p.id}">Активировать</button>`}
+          <button type="button" data-prompt-edit="${p.id}">Редактировать</button>
+          <button type="button" data-prompt-remove="${p.id}" class="danger">Удалить</button>
+        </div>
+      </div>
+    `)
+    .join("");
+}
+
+async function loadPrompts() {
+  const data = await api("/api/prompts");
+  renderPrompts(data.prompts || []);
+}
+
+async function savePrompt() {
+  const payload = {
+    task: $("new-prompt-task").value,
+    name: $("new-prompt-name").value.trim() || "default",
+    system_prompt: $("new-prompt-system").value,
+    user_template: $("new-prompt-user").value,
+    is_active: $("new-prompt-active").checked,
+  };
+  if (!payload.system_prompt.trim() || !payload.user_template.trim()) {
+    throw new Error("Заполни system и user-шаблон");
+  }
+  await api("/api/prompts", { method: "POST", body: JSON.stringify(payload) });
+  toast("Промпт сохранён");
+  await loadPrompts();
+}
+
+async function activatePrompt(id) {
+  await api(`/api/prompts/${id}/activate`, { method: "POST", body: "{}" });
+  toast("Активирован");
+  await loadPrompts();
+}
+
+async function editPromptInline(id) {
+  const prompt = state.prompts.find((p) => String(p.id) === String(id));
+  if (!prompt) return;
+  $("new-prompt-task").value = prompt.task;
+  $("new-prompt-name").value = prompt.name;
+  $("new-prompt-system").value = prompt.system_prompt;
+  $("new-prompt-user").value = prompt.user_template;
+  $("new-prompt-active").checked = !!prompt.is_active;
+  toast(`Редактируешь: ${prompt.task}/${prompt.name}. Жми «Сохранить промпт».`);
+  $("new-prompt-system").focus();
+}
+
+async function removePrompt(id) {
+  if (!window.confirm("Удалить промпт?")) return;
+  await api(`/api/prompts/${id}`, { method: "DELETE" });
+  toast("Промпт удалён");
+  await loadPrompts();
+}
+
+// ---- Posting ---------------------------------------------------------------
+
+async function previewPost() {
+  const payload = {
+    days: Number($("post-days").value || 1),
+    instruction: $("post-instruction").value.trim() || undefined,
+    prompt_name: $("post-style").value.trim() || undefined,
+  };
+  const data = await api("/api/posting/preview", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  $("post-text").value = data.text || "";
+  $("post-status").textContent = `Новостей: ${data.input_count}, после дедупа: ${data.unique_count}.`;
+}
+
+async function sendPost() {
+  const botId = Number($("post-bot").value);
+  if (!botId) throw new Error("Выбери бота");
+  const text = $("post-text").value.trim();
+  if (!text) throw new Error("Текст поста пуст");
+  const payload = {
+    bot_id: botId,
+    text,
+    chat_id: $("post-chat").value.trim() || undefined,
+    parse_mode: $("post-parse-mode").value || undefined,
+    disable_web_page_preview: true,
+  };
+  const data = await api("/api/posting/send", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  $("post-status").textContent = `Отправлено в ${data.chat_id} (бот #${data.bot_id}).`;
+  toast("Пост опубликован");
+}
+
 function wireEvents() {
   $("setup-btn").addEventListener("click", (e) => withBusy(e.target, setupAdmin).catch((err) => toast(err.message)));
   $("login-btn").addEventListener("click", (e) => withBusy(e.target, login).catch((err) => toast(err.message)));
@@ -528,10 +764,20 @@ function wireEvents() {
   $("settings-save-btn").addEventListener("click", (e) => withBusy(e.target, saveSettings).catch((err) => toast(err.message)));
   $("models-load-btn").addEventListener("click", (e) => withBusy(e.target, loadModels).catch((err) => toast(err.message)));
   $("selected-model-load-btn").addEventListener("click", (e) => withBusy(e.target, async () => {
-    const model = $("lm-model").value.trim();
+    const model = $("lm-model").value;
     if (!model) throw new Error("Выберите модель");
     await loadModel(model);
   }).catch((err) => toast(err.message)));
+  $("lm-model").addEventListener("change", (e) => {
+    const model = e.target.value;
+    if (model) selectModel(model).catch((err) => toast(err.message));
+  });
+  $("bots-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadBots).catch((err) => toast(err.message)));
+  $("new-bot-add-btn").addEventListener("click", (e) => withBusy(e.target, addBot).catch((err) => toast(err.message)));
+  $("prompts-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadPrompts).catch((err) => toast(err.message)));
+  $("new-prompt-save-btn").addEventListener("click", (e) => withBusy(e.target, savePrompt).catch((err) => toast(err.message)));
+  $("post-preview-btn").addEventListener("click", (e) => withBusy(e.target, previewPost).catch((err) => toast(err.message)));
+  $("post-send-btn").addEventListener("click", (e) => withBusy(e.target, sendPost).catch((err) => toast(err.message)));
   $("lm-test-btn").addEventListener("click", (e) => withBusy(e.target, testLm).catch((err) => toast(err.message)));
   $("tg-status-btn").addEventListener("click", (e) => withBusy(e.target, refreshTelegramStatus).catch((err) => toast(err.message)));
   $("tg-code-btn").addEventListener("click", (e) => withBusy(e.target, sendTelegramCode).catch((err) => toast(err.message)));
@@ -563,6 +809,22 @@ function wireEvents() {
       const [categoryId, username] = defaultSource.split("::");
       addDefaultSource(categoryId, username).catch((err) => toast(err.message));
     }
+
+    const botToggle = target.dataset.botToggle;
+    const botEditToken = target.dataset.botEditToken;
+    const botEditChat = target.dataset.botEditChat;
+    const botRemove = target.dataset.botRemove;
+    const promptActivate = target.dataset.promptActivate;
+    const promptEdit = target.dataset.promptEdit;
+    const promptRemove = target.dataset.promptRemove;
+
+    if (botToggle) toggleBot(botToggle).catch((err) => toast(err.message));
+    if (botEditToken) patchBotPrompt(botEditToken, "token").catch((err) => toast(err.message));
+    if (botEditChat) patchBotPrompt(botEditChat, "chat").catch((err) => toast(err.message));
+    if (botRemove) removeBot(botRemove).catch((err) => toast(err.message));
+    if (promptActivate) activatePrompt(promptActivate).catch((err) => toast(err.message));
+    if (promptEdit) editPromptInline(promptEdit).catch((err) => toast(err.message));
+    if (promptRemove) removePrompt(promptRemove).catch((err) => toast(err.message));
   });
 }
 
@@ -574,6 +836,9 @@ async function runAll() {
     loadSources(),
     loadDefaults(),
     loadNews(),
+    loadModels().catch(() => {}),
+    loadBots(),
+    loadPrompts(),
   ]);
 }
 

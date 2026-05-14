@@ -158,6 +158,42 @@ class Database:
                 updated_at TEXT NOT NULL
             )
         """)
+
+        # Posting bots — multiple Telegram bot tokens or the user account that
+        # can publish aggregated news. `kind` is 'bot_api' or 'telethon'.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS posting_bots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                label TEXT NOT NULL,
+                kind TEXT NOT NULL DEFAULT 'bot_api',
+                token TEXT,
+                default_chat_id TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        """)
+
+        # LLM prompt templates per task. `task` is one of:
+        # 'dedup', 'summary', 'tags', 'repost'. There can be many named
+        # variants per task; the active one is used by the worker.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS llm_prompts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                task TEXT NOT NULL,
+                name TEXT NOT NULL,
+                system_prompt TEXT NOT NULL,
+                user_template TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(task, name)
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_llm_prompts_task
+            ON llm_prompts(task, is_active DESC)
+        """)
         
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_sources_channel 
@@ -746,6 +782,195 @@ class Database:
             return json.loads(row["value"])
         except (TypeError, json.JSONDecodeError):
             return row["value"]
+
+    # ---- Posting bots ----------------------------------------------------
+    def list_bots(self) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, label, kind, token, default_chat_id, enabled,
+                   created_at, updated_at
+            FROM posting_bots
+            ORDER BY id ASC
+        """)
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        for row in rows:
+            row["enabled"] = bool(row["enabled"])
+            row["token_set"] = bool(row.get("token"))
+        return rows
+
+    def get_bot(self, bot_id: int) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, label, kind, token, default_chat_id, enabled,
+                   created_at, updated_at
+            FROM posting_bots WHERE id = ?
+        """, (bot_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        record = dict(row)
+        record["enabled"] = bool(record["enabled"])
+        record["token_set"] = bool(record.get("token"))
+        return record
+
+    def create_bot(
+        self,
+        label: str,
+        kind: str = "bot_api",
+        token: Optional[str] = None,
+        default_chat_id: Optional[str] = None,
+        enabled: bool = True,
+    ) -> int:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute("""
+            INSERT INTO posting_bots
+                (label, kind, token, default_chat_id, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (label, kind, token, default_chat_id, 1 if enabled else 0, now, now))
+        conn.commit()
+        bot_id = cursor.lastrowid
+        conn.close()
+        return int(bot_id)
+
+    def update_bot(self, bot_id: int, **fields: Any) -> bool:
+        allowed = {"label", "kind", "token", "default_chat_id", "enabled"}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+        if not updates:
+            return False
+        if "enabled" in updates:
+            updates["enabled"] = 1 if updates["enabled"] else 0
+        updates["updated_at"] = datetime.now().isoformat()
+        columns = ", ".join(f"{k} = ?" for k in updates)
+        params = list(updates.values()) + [bot_id]
+
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"UPDATE posting_bots SET {columns} WHERE id = ?", params)
+        conn.commit()
+        changed = cursor.rowcount > 0
+        conn.close()
+        return changed
+
+    def delete_bot(self, bot_id: int) -> bool:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM posting_bots WHERE id = ?", (bot_id,))
+        conn.commit()
+        removed = cursor.rowcount > 0
+        conn.close()
+        return removed
+
+    # ---- LLM prompts -----------------------------------------------------
+    def list_prompts(self, task: Optional[str] = None) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        if task:
+            cursor.execute("""
+                SELECT id, task, name, system_prompt, user_template, is_active,
+                       created_at, updated_at
+                FROM llm_prompts WHERE task = ?
+                ORDER BY is_active DESC, name ASC
+            """, (task,))
+        else:
+            cursor.execute("""
+                SELECT id, task, name, system_prompt, user_template, is_active,
+                       created_at, updated_at
+                FROM llm_prompts
+                ORDER BY task ASC, is_active DESC, name ASC
+            """)
+        rows = [dict(row) for row in cursor.fetchall()]
+        conn.close()
+        for row in rows:
+            row["is_active"] = bool(row["is_active"])
+        return rows
+
+    def get_active_prompt(self, task: str) -> Optional[Dict[str, Any]]:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, task, name, system_prompt, user_template, is_active
+            FROM llm_prompts WHERE task = ? AND is_active = 1
+            LIMIT 1
+        """, (task,))
+        row = cursor.fetchone()
+        conn.close()
+        if not row:
+            return None
+        record = dict(row)
+        record["is_active"] = bool(record["is_active"])
+        return record
+
+    def upsert_prompt(
+        self,
+        task: str,
+        name: str,
+        system_prompt: str,
+        user_template: str,
+        is_active: bool = False,
+    ) -> int:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        now = datetime.now().isoformat()
+        cursor.execute("""
+            INSERT INTO llm_prompts
+                (task, name, system_prompt, user_template, is_active, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(task, name) DO UPDATE SET
+                system_prompt = excluded.system_prompt,
+                user_template = excluded.user_template,
+                is_active = excluded.is_active,
+                updated_at = excluded.updated_at
+        """, (task, name, system_prompt, user_template, 1 if is_active else 0, now, now))
+        if is_active:
+            cursor.execute("""
+                UPDATE llm_prompts SET is_active = 0
+                WHERE task = ? AND name <> ?
+            """, (task, name))
+        conn.commit()
+        cursor.execute(
+            "SELECT id FROM llm_prompts WHERE task = ? AND name = ?",
+            (task, name),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return int(row["id"]) if row else 0
+
+    def set_active_prompt(self, prompt_id: int) -> bool:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT task FROM llm_prompts WHERE id = ?", (prompt_id,))
+        row = cursor.fetchone()
+        if not row:
+            conn.close()
+            return False
+        task = row["task"]
+        now = datetime.now().isoformat()
+        cursor.execute(
+            "UPDATE llm_prompts SET is_active = 0, updated_at = ? WHERE task = ?",
+            (now, task),
+        )
+        cursor.execute(
+            "UPDATE llm_prompts SET is_active = 1, updated_at = ? WHERE id = ?",
+            (now, prompt_id),
+        )
+        conn.commit()
+        conn.close()
+        return True
+
+    def delete_prompt(self, prompt_id: int) -> bool:
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM llm_prompts WHERE id = ?", (prompt_id,))
+        conn.commit()
+        removed = cursor.rowcount > 0
+        conn.close()
+        return removed
 
     def get_settings(self) -> Dict[str, Any]:
         """Read all application settings."""

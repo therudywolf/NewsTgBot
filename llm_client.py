@@ -276,6 +276,79 @@ class LLMClient:
             return data["text"]
         return None
 
+    @staticmethod
+    def _format_news_list(news_items: List[Dict[str, Any]]) -> str:
+        """Render a numbered transcript of news items for prompt insertion."""
+        lines: List[str] = []
+        for idx, item in enumerate(news_items, 1):
+            text = (item.get("text") or "").strip()
+            if not text:
+                continue
+            channel = item.get("title") or item.get("username") or "источник"
+            date = item.get("date") or ""
+            lines.append(f"{idx}. [{channel}] {date}\n{text}\n")
+        return "\n".join(lines)
+
+    def _load_active_prompt(self, task: str) -> Optional[Dict[str, str]]:
+        """Look up an admin-configured prompt for *task* from the database."""
+        try:
+            from database import Database
+
+            record = Database().get_active_prompt(task)
+        except Exception as e:  # noqa: BLE001 — DB is best-effort here
+            logger.debug("Could not load %s prompt from DB: %s", task, e)
+            return None
+        if not record:
+            return None
+        return {
+            "system": record.get("system_prompt") or "",
+            "user_template": record.get("user_template") or "",
+        }
+
+    async def chat(self, system_prompt: str, user_prompt: str) -> Optional[str]:
+        """Public single-turn chat helper used by posting/preview flows."""
+        return await self._make_request(user_prompt, system_prompt)
+
+    async def rewrite_post(
+        self,
+        news_items: List[Dict[str, Any]],
+        instruction: Optional[str] = None,
+        prompt_name: Optional[str] = None,
+    ) -> Optional[str]:
+        """Rewrite a batch of news into a publish-ready Telegram post.
+
+        Uses the active 'repost' prompt from the DB if available; otherwise
+        falls back to a generic instruction. *instruction* lets the caller
+        override the user template inline (e.g. "make it shorter").
+        """
+        if not news_items:
+            return None
+
+        news_text = self._format_news_list(news_items)
+        record = self._load_active_prompt("repost")
+        system_prompt = (
+            record["system"]
+            if record and record["system"]
+            else (
+                "Ты редактор Telegram-канала об IT. Перепиши подборку новостей "
+                "в один короткий пост на русском языке: 1-3 абзаца, без воды, "
+                "с эмодзи в начале строки, в конце — отдельной строкой источники."
+            )
+        )
+
+        template = (
+            record["user_template"]
+            if record and record["user_template"]
+            else "Подборка для поста:\n\n{news}\n\nДополнительная инструкция: {instruction}"
+        )
+        formatted = template.replace("{news}", news_text).replace(
+            "{instruction}", (instruction or "").strip() or "—"
+        )
+        if prompt_name:
+            formatted = f"[Стиль: {prompt_name}]\n{formatted}"
+        response = await self._make_request(formatted, system_prompt)
+        return response.strip() if response else None
+
     async def deduplicate_news(self, news_items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Use LLM to deduplicate news items."""
         if not news_items:
@@ -287,18 +360,24 @@ class LLMClient:
             if text:
                 news_text += f"{idx}. {text}\n\n"
 
-        system_prompt = """Ты помощник для удаления дубликатов новостей.
+        custom = self._load_active_prompt("dedup")
+        default_system = """Ты помощник для удаления дубликатов новостей.
 Твоя задача - проанализировать список новостей и определить, какие из них являются дубликатами или описывают одно и то же событие.
 Верни только уникальные новости, удалив все дубликаты и повторы.
 
 Важно: верни ТОЛЬКО номера уникальных новостей в формате JSON массива чисел, например: [1, 3, 5, 7]
 Не включай в ответ никаких дополнительных объяснений или текста, только JSON массив."""
-
-        user_prompt = f"""Проанализируй следующие новости и определи, какие из них уникальны:
+        default_user = f"""Проанализируй следующие новости и определи, какие из них уникальны:
 
 {news_text}
 
 Верни JSON массив с номерами уникальных новостей, начиная с 1."""
+
+        system_prompt = custom["system"] if custom and custom["system"] else default_system
+        if custom and custom["user_template"]:
+            user_prompt = custom["user_template"].replace("{news}", news_text)
+        else:
+            user_prompt = default_user
 
         response = await self._make_request(user_prompt, system_prompt)
         if not response:
@@ -329,11 +408,11 @@ class LLMClient:
             if text:
                 news_text += f"{idx}. [{channel}] {date}\n{text}\n\n"
 
-        system_prompt = """Ты редактор IT-новостей.
+        custom = self._load_active_prompt("summary")
+        default_system = """Ты редактор IT-новостей.
 Собери краткую, структурированную сводку. Группируй похожие события, убирай повторы, сохраняй факты и источники.
 Пиши на русском языке, без рекламного тона."""
-
-        user_prompt = f"""Создай краткую сводку новостей за период {period_description}:
+        default_user = f"""Создай краткую сводку новостей за период {period_description}:
 
 {news_text}
 
@@ -341,6 +420,16 @@ class LLMClient:
 1. Короткий заголовок темы
 2. 1-3 предложения с сутью
 3. Источники в скобках, если они есть в списке"""
+
+        system_prompt = custom["system"] if custom and custom["system"] else default_system
+        if custom and custom["user_template"]:
+            user_prompt = (
+                custom["user_template"]
+                .replace("{news}", news_text)
+                .replace("{period}", period_description or "")
+            )
+        else:
+            user_prompt = default_user
 
         response = await self._make_request(user_prompt, system_prompt)
         if not response:
@@ -353,12 +442,18 @@ class LLMClient:
         if not news_text or not news_text.strip():
             return []
 
-        system_prompt = """Ты помощник для генерации тегов новостей.
+        custom = self._load_active_prompt("tags")
+        default_system = """Ты помощник для генерации тегов новостей.
 Верни только JSON массив из 3-5 коротких тегов на русском языке."""
-
-        user_prompt = f"""Проанализируй новость и создай 3-5 релевантных тегов:
+        default_user = f"""Проанализируй новость и создай 3-5 релевантных тегов:
 
 {news_text}"""
+
+        system_prompt = custom["system"] if custom and custom["system"] else default_system
+        if custom and custom["user_template"]:
+            user_prompt = custom["user_template"].replace("{news}", news_text)
+        else:
+            user_prompt = default_user
 
         response = await self._make_request(user_prompt, system_prompt)
         if not response:
