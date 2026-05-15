@@ -65,11 +65,15 @@ async def _step_parse_sources(
 ) -> Dict[str, Any]:
     source_ids: List[int] = params.get("source_ids") or []
     source_group: Optional[str] = params.get("source_group")
+    source_group_id: Optional[int] = params.get("source_group_id")
     limit = int(params.get("limit", 200))
     days = int(params.get("days", 7))
 
     all_channels = db.get_all_channels()
-    if source_ids:
+    if source_group_id:
+        wanted_ids = set(db.get_group_channel_ids(int(source_group_id)))
+        wanted = [c for c in all_channels if c["channel_id"] in wanted_ids]
+    elif source_ids:
         wanted = [c for c in all_channels if c["channel_id"] in source_ids]
     elif source_group and source_group != "all":
         wanted = [c for c in all_channels if (c.get("source_type") or "telegram_bot") == source_group]

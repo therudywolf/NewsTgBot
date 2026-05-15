@@ -11,7 +11,7 @@ See LICENSE file for details.
 import sqlite3
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 import config
 
@@ -259,6 +259,77 @@ class Database:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_pipeline_step_runs_run
             ON pipeline_step_runs(run_id, position)
+        """)
+
+        # User-defined groups of sources for bulk parsing.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS source_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                color TEXT NOT NULL DEFAULT '#5dd2a2',
+                created_at TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS source_group_members (
+                group_id INTEGER NOT NULL,
+                channel_id INTEGER NOT NULL,
+                added_at TEXT NOT NULL,
+                PRIMARY KEY (group_id, channel_id),
+                FOREIGN KEY (group_id) REFERENCES source_groups(id) ON DELETE CASCADE
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_source_group_members_channel
+            ON source_group_members(channel_id)
+        """)
+
+        # Multiple posting destinations per bot.
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS posting_targets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bot_id INTEGER NOT NULL,
+                chat_id TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (bot_id) REFERENCES posting_bots(id) ON DELETE CASCADE,
+                UNIQUE(bot_id, chat_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posting_targets_bot
+            ON posting_targets(bot_id)
+        """)
+
+        # Bot identity cache populated by Bot API getMe.
+        try:
+            cursor.execute("ALTER TABLE posting_bots ADD COLUMN bot_username TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE posting_bots ADD COLUMN bot_first_name TEXT")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            cursor.execute("ALTER TABLE posting_bots ADD COLUMN bot_id_telegram INTEGER")
+        except sqlite3.OperationalError:
+            pass
+
+        # Audit log of admin actions (used by Sprint 3, table created here so
+        # later sprints don't need a migration).
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor TEXT NOT NULL,
+                action TEXT NOT NULL,
+                payload TEXT,
+                ip TEXT,
+                at TEXT NOT NULL
+            )
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_audit_log_at
+            ON audit_log(at DESC)
         """)
 
         # Media attachments captured from parsed news items (stage D).
@@ -1058,6 +1129,228 @@ class Database:
         removed = cursor.rowcount > 0
         conn.close()
         return removed
+
+    # ---- Source groups ---------------------------------------------------
+    def list_source_groups(self) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT g.id, g.name, g.color, g.created_at,
+                   COUNT(m.channel_id) AS member_count
+            FROM source_groups g
+            LEFT JOIN source_group_members m ON m.group_id = g.id
+            GROUP BY g.id ORDER BY g.name
+        """)
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def create_source_group(self, name: str, color: str = "#5dd2a2") -> int:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO source_groups (name, color, created_at) VALUES (?, ?, ?)",
+            (name, color, datetime.now().isoformat()),
+        )
+        conn.commit()
+        gid = cur.lastrowid
+        conn.close()
+        return int(gid)
+
+    def rename_source_group(self, group_id: int, name: Optional[str], color: Optional[str]) -> bool:
+        fields = []
+        params: List[Any] = []
+        if name is not None:
+            fields.append("name = ?")
+            params.append(name)
+        if color is not None:
+            fields.append("color = ?")
+            params.append(color)
+        if not fields:
+            return False
+        params.append(group_id)
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute(f"UPDATE source_groups SET {', '.join(fields)} WHERE id = ?", params)
+        conn.commit()
+        changed = cur.rowcount > 0
+        conn.close()
+        return changed
+
+    def delete_source_group(self, group_id: int) -> bool:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM source_groups WHERE id = ?", (group_id,))
+        conn.commit()
+        removed = cur.rowcount > 0
+        conn.close()
+        return removed
+
+    def add_sources_to_group(self, group_id: int, channel_ids: List[int]) -> int:
+        if not channel_ids:
+            return 0
+        conn = self._get_connection()
+        cur = conn.cursor()
+        now = datetime.now().isoformat()
+        added = 0
+        for ch_id in channel_ids:
+            try:
+                cur.execute(
+                    "INSERT OR IGNORE INTO source_group_members (group_id, channel_id, added_at) VALUES (?, ?, ?)",
+                    (group_id, ch_id, now),
+                )
+                added += cur.rowcount
+            except sqlite3.Error:
+                continue
+        conn.commit()
+        conn.close()
+        return added
+
+    def remove_sources_from_group(self, group_id: int, channel_ids: List[int]) -> int:
+        if not channel_ids:
+            return 0
+        conn = self._get_connection()
+        cur = conn.cursor()
+        placeholders = ",".join("?" * len(channel_ids))
+        cur.execute(
+            f"DELETE FROM source_group_members WHERE group_id = ? AND channel_id IN ({placeholders})",
+            (group_id, *channel_ids),
+        )
+        conn.commit()
+        removed = cur.rowcount
+        conn.close()
+        return removed
+
+    def get_group_channel_ids(self, group_id: int) -> List[int]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT channel_id FROM source_group_members WHERE group_id = ?",
+            (group_id,),
+        )
+        rows = [row["channel_id"] for row in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def get_groups_for_channel(self, channel_id: int) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT g.id, g.name, g.color
+            FROM source_groups g
+            JOIN source_group_members m ON m.group_id = g.id
+            WHERE m.channel_id = ?
+            ORDER BY g.name
+        """, (channel_id,))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
+    # ---- Posting targets -------------------------------------------------
+    def list_bot_targets(self, bot_id: int) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, bot_id, chat_id, title, created_at FROM posting_targets WHERE bot_id = ? ORDER BY id",
+            (bot_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def add_bot_target(self, bot_id: int, chat_id: str, title: Optional[str] = None) -> Optional[int]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        try:
+            cur.execute(
+                "INSERT INTO posting_targets (bot_id, chat_id, title, created_at) VALUES (?, ?, ?, ?)",
+                (bot_id, chat_id, title, datetime.now().isoformat()),
+            )
+            conn.commit()
+            return int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            return None
+        finally:
+            conn.close()
+
+    def remove_bot_target(self, target_id: int) -> bool:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM posting_targets WHERE id = ?", (target_id,))
+        conn.commit()
+        removed = cur.rowcount > 0
+        conn.close()
+        return removed
+
+    def update_bot_identity(
+        self, bot_id: int, tg_id: Optional[int], username: Optional[str], first_name: Optional[str]
+    ) -> bool:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE posting_bots
+            SET bot_id_telegram = COALESCE(?, bot_id_telegram),
+                bot_username    = COALESCE(?, bot_username),
+                bot_first_name  = COALESCE(?, bot_first_name),
+                updated_at      = ?
+            WHERE id = ?
+            """,
+            (tg_id, username, first_name, datetime.now().isoformat(), bot_id),
+        )
+        conn.commit()
+        changed = cur.rowcount > 0
+        conn.close()
+        return changed
+
+    # ---- Audit log (Sprint 3 surface, written from middleware) ----------
+    def append_audit(
+        self, actor: str, action: str, payload: Optional[Dict[str, Any]], ip: Optional[str] = None
+    ) -> None:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO audit_log (actor, action, payload, ip, at) VALUES (?, ?, ?, ?, ?)",
+            (actor, action, json.dumps(payload, ensure_ascii=False) if payload else None, ip, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_audit(self, limit: int = 200) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, actor, action, payload, ip, at FROM audit_log ORDER BY at DESC LIMIT ?",
+            (limit,),
+        )
+        rows = []
+        for r in cur.fetchall():
+            entry = dict(r)
+            if entry.get("payload"):
+                try:
+                    entry["payload"] = json.loads(entry["payload"])
+                except (TypeError, json.JSONDecodeError):
+                    pass
+            rows.append(entry)
+        conn.close()
+        return rows
+
+    # ---- News count by hour (dashboard sparkline) -----------------------
+    def news_count_by_hour(self, hours: int = 24) -> List[Dict[str, Any]]:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        start = (datetime.now() - timedelta(hours=hours)).isoformat()
+        cur.execute(
+            """
+            SELECT substr(date, 1, 13) AS hour, COUNT(*) AS count
+            FROM news WHERE date >= ?
+            GROUP BY hour ORDER BY hour
+            """,
+            (start,),
+        )
+        rows = [{"hour": r["hour"], "count": r["count"]} for r in cur.fetchall()]
+        conn.close()
+        return rows
 
     # ---- Pipelines -------------------------------------------------------
     def list_pipelines(self) -> List[Dict[str, Any]]:

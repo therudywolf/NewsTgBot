@@ -254,6 +254,25 @@ class PipelineTemplatePayload(BaseModel):
     name: Optional[str] = Field(default=None, max_length=128)
 
 
+class SourceGroupPayload(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    color: Optional[str] = Field(default=None, max_length=16)
+
+
+class SourceGroupUpdatePayload(BaseModel):
+    name: Optional[str] = Field(default=None, max_length=64)
+    color: Optional[str] = Field(default=None, max_length=16)
+
+
+class SourceGroupMembersPayload(BaseModel):
+    channel_ids: List[int]
+
+
+class BotTargetPayload(BaseModel):
+    chat_id: str = Field(min_length=1, max_length=128)
+    title: Optional[str] = Field(default=None, max_length=128)
+
+
 class PipelinePayload(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     group_name: str = Field(default="default", min_length=1, max_length=64)
@@ -1123,6 +1142,118 @@ async def create_pipeline_from_template(payload: PipelineTemplatePayload):
 async def news_media_endpoint(news_id: int):
     media = db.get_media_for_news([news_id]).get(news_id, [])
     return {"media": media}
+
+
+# ---- Source groups --------------------------------------------------------
+
+
+@app.get("/api/source-groups")
+async def list_source_groups_endpoint():
+    return {"groups": db.list_source_groups()}
+
+
+@app.post("/api/source-groups")
+async def create_source_group_endpoint(payload: SourceGroupPayload):
+    try:
+        gid = db.create_source_group(payload.name.strip(), payload.color or "#5dd2a2")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"id": gid}
+
+
+@app.patch("/api/source-groups/{group_id}")
+async def update_source_group_endpoint(group_id: int, payload: SourceGroupUpdatePayload):
+    if not db.rename_source_group(group_id, payload.name, payload.color):
+        raise HTTPException(status_code=404, detail="Group not found or no changes")
+    return {"ok": True}
+
+
+@app.delete("/api/source-groups/{group_id}")
+async def delete_source_group_endpoint(group_id: int):
+    return {"removed": db.delete_source_group(group_id)}
+
+
+@app.get("/api/source-groups/{group_id}/channels")
+async def list_source_group_channels(group_id: int):
+    ids = db.get_group_channel_ids(group_id)
+    return {"channel_ids": ids}
+
+
+@app.post("/api/source-groups/{group_id}/channels")
+async def add_to_source_group_endpoint(group_id: int, payload: SourceGroupMembersPayload):
+    added = db.add_sources_to_group(group_id, payload.channel_ids)
+    return {"added": added}
+
+
+@app.delete("/api/source-groups/{group_id}/channels")
+async def remove_from_source_group_endpoint(group_id: int, payload: SourceGroupMembersPayload):
+    removed = db.remove_sources_from_group(group_id, payload.channel_ids)
+    return {"removed": removed}
+
+
+# ---- Bot identity / targets ----------------------------------------------
+
+
+@app.post("/api/posting/bots/{bot_id}/getme")
+async def bot_getme_endpoint(bot_id: int):
+    bot = db.get_bot(bot_id)
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+    if bot["kind"] != "bot_api":
+        raise HTTPException(status_code=400, detail="getMe is only available for Bot API kind")
+    token = bot.get("token")
+    if not token:
+        raise HTTPException(status_code=400, detail="Bot token is not configured")
+
+    import aiohttp
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.get(url) as response:
+            data = await response.json(content_type=None)
+            if response.status >= 400 or not data.get("ok"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Bot API getMe error: {data.get('description') or data}",
+                )
+    me = data.get("result", {})
+    db.update_bot_identity(
+        bot_id=bot_id,
+        tg_id=me.get("id"),
+        username=me.get("username"),
+        first_name=me.get("first_name"),
+    )
+    return {"me": me}
+
+
+@app.get("/api/posting/bots/{bot_id}/targets")
+async def list_bot_targets_endpoint(bot_id: int):
+    if not db.get_bot(bot_id):
+        raise HTTPException(status_code=404, detail="Bot not found")
+    return {"targets": db.list_bot_targets(bot_id)}
+
+
+@app.post("/api/posting/bots/{bot_id}/targets")
+async def add_bot_target_endpoint(bot_id: int, payload: BotTargetPayload):
+    if not db.get_bot(bot_id):
+        raise HTTPException(status_code=404, detail="Bot not found")
+    target_id = db.add_bot_target(bot_id, payload.chat_id.strip(), payload.title)
+    if target_id is None:
+        raise HTTPException(status_code=409, detail="Target with this chat_id already exists")
+    return {"id": target_id}
+
+
+@app.delete("/api/posting/bots/{bot_id}/targets/{target_id}")
+async def remove_bot_target_endpoint(bot_id: int, target_id: int):
+    return {"removed": db.remove_bot_target(target_id)}
+
+
+# ---- Dashboard helpers ----------------------------------------------------
+
+
+@app.get("/api/dashboard/news-by-hour")
+async def dashboard_news_by_hour(hours: int = 24):
+    return {"hours": db.news_count_by_hour(min(max(hours, 1), 168))}
 
 
 @app.get("/api/runs/{run_id}")

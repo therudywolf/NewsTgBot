@@ -271,20 +271,68 @@ function renderMetrics(status) {
     .join("");
 }
 
+function renderSparkline(buckets) {
+  // Simple inline-bar sparkline, no SVG — keeps the page light.
+  if (!buckets || !buckets.length) return "";
+  const max = Math.max(1, ...buckets.map((b) => b.count || 0));
+  const bars = buckets
+    .map((b) => {
+      const h = Math.round(((b.count || 0) / max) * 100);
+      const label = `${b.hour || ""} · ${b.count || 0}`;
+      return `<span class="spark-bar" style="height:${Math.max(h, 2)}%" title="${escapeHtml(label)}"></span>`;
+    })
+    .join("");
+  const total = buckets.reduce((acc, b) => acc + (b.count || 0), 0);
+  return `<div class="sparkline">${bars}</div><div class="item-meta">Всего за период: ${total}</div>`;
+}
+
 async function loadDashboard() {
   const status = await api("/api/status");
   store.set("status", status);
   renderMetrics(status);
 
-  const news = await api("/api/news?days=1&limit=10");
-  $("dashboard-news").innerHTML = (news.news || []).length
-    ? (news.news || [])
-        .map((row) => `<div class="item"><div><div class="item-title">${escapeHtml((row.text || "").slice(0, 120))}…</div><div class="item-meta">${escapeHtml(fmtDate(row.date))} · ${escapeHtml(row.title || row.username || "—")}</div></div></div>`)
-        .join("")
-    : `<div class="notice">Новостей за сутки нет.</div>`;
+  // Recent news
+  try {
+    const news = await api("/api/news?days=1&limit=10");
+    $("dashboard-news").innerHTML = (news.news || []).length
+      ? (news.news || [])
+          .map((row) => `<div class="item"><div><div class="item-title">${escapeHtml((row.text || "").slice(0, 120))}…</div><div class="item-meta">${escapeHtml(fmtDate(row.date))} · ${escapeHtml(row.title || row.username || "—")}</div></div></div>`)
+          .join("")
+      : `<div class="notice">Новостей за сутки нет.</div>`;
+  } catch (e) {
+    $("dashboard-news").innerHTML = `<div class="notice">Не удалось загрузить новости: ${escapeHtml(e.message)}</div>`;
+  }
 
-  // Runs panel — placeholder until pipeline runs ship
-  $("dashboard-runs").innerHTML = `<div class="notice">Пайплайны и запуски — на вкладке «Пайплайны».</div>`;
+  // Hourly sparkline (prepended) + recent runs from real /api/runs
+  let sparkHtml = "";
+  try {
+    const hr = await api("/api/dashboard/news-by-hour?hours=24");
+    sparkHtml = renderSparkline(hr.hours || []);
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    const runsData = await api("/api/runs?limit=10");
+    const runs = runsData.runs || [];
+    const runsHtml = runs.length
+      ? runs
+          .map((r) => `
+            <div class="item">
+              <div>
+                <div class="item-title">#${r.id} · ${escapeHtml(r.pipeline_name || "—")}
+                  <span class="tag ${statusTagClass(r.status)}">${escapeHtml(r.status)}</span>
+                </div>
+                <div class="item-meta">${escapeHtml(fmtDate(r.started_at))} · ${escapeHtml(r.trigger || "manual")}${r.error ? ` · ${escapeHtml(r.error)}` : ""}</div>
+              </div>
+            </div>
+          `)
+          .join("")
+      : `<div class="notice">Запусков пока нет.</div>`;
+    $("dashboard-runs").innerHTML = `${sparkHtml}${runsHtml}`;
+  } catch (e) {
+    $("dashboard-runs").innerHTML = `${sparkHtml}<div class="notice">Не удалось загрузить запуски: ${escapeHtml(e.message)}</div>`;
+  }
 }
 
 pageLoaders.dashboard = loadDashboard;
@@ -506,7 +554,92 @@ async function parseAll() {
 pageLoaders.sources = async () => {
   await loadSources();
   await loadDefaults();
+  await loadUserGroups();
 };
+
+// ---- User-defined source groups -------------------------------------------
+
+function renderUserGroups() {
+  const groups = store.get("userGroups") || [];
+  const container = $("user-source-groups");
+  if (!container) return;
+  if (!groups.length) {
+    container.innerHTML = `<div class="item-meta" style="padding:4px 10px">Пусто. Нажми «+».</div>`;
+    return;
+  }
+  container.innerHTML = groups
+    .map((g) => `
+      <div class="item group-item ${sourcesView.group === `usr:${g.id}` ? "active" : ""}" data-user-group="${g.id}">
+        <span style="display:inline-flex;align-items:center;gap:6px">
+          <span class="dot" style="background:${escapeHtml(g.color || "#5dd2a2")};display:inline-block;width:10px;height:10px;border-radius:50%"></span>
+          ${escapeHtml(g.name)}
+        </span>
+        <span class="item-actions">
+          <span class="tag">${g.member_count ?? 0}</span>
+          <button type="button" data-user-group-rename="${g.id}" title="Переименовать">✎</button>
+          <button type="button" data-user-group-remove="${g.id}" class="danger" title="Удалить">×</button>
+        </span>
+      </div>
+    `)
+    .join("");
+}
+
+async function loadUserGroups() {
+  try {
+    const data = await api("/api/source-groups");
+    store.set("userGroups", data.groups || []);
+    renderUserGroups();
+  } catch (e) {
+    console.error("user groups load failed:", e);
+  }
+}
+
+async function createUserGroup() {
+  const name = window.prompt("Название группы:");
+  if (!name || !name.trim()) return;
+  await api("/api/source-groups", { method: "POST", body: JSON.stringify({ name: name.trim() }) });
+  toast("Группа создана");
+  await loadUserGroups();
+}
+
+async function renameUserGroup(id) {
+  const g = (store.get("userGroups") || []).find((x) => String(x.id) === String(id));
+  const name = window.prompt("Новое название:", g?.name || "");
+  if (name === null) return;
+  await api(`/api/source-groups/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+  toast("Сохранено");
+  await loadUserGroups();
+}
+
+async function removeUserGroup(id) {
+  if (!window.confirm("Удалить группу? Источники останутся.")) return;
+  await api(`/api/source-groups/${id}`, { method: "DELETE" });
+  toast("Удалена");
+  await loadUserGroups();
+}
+
+async function bulkAddToGroup() {
+  const ids = Array.from(sourcesView.selected);
+  if (!ids.length) throw new Error("Выберите источники");
+  const groups = store.get("userGroups") || [];
+  if (!groups.length) {
+    if (!window.confirm("Нет ни одной группы. Создать новую?")) return;
+    await createUserGroup();
+    return bulkAddToGroup();
+  }
+  const options = groups.map((g, i) => `${i + 1}. ${g.name} (${g.member_count ?? 0})`).join("\n");
+  const choice = window.prompt(`Выбери группу для ${ids.length} источников:\n\n${options}\n\nНомер:`);
+  if (!choice) return;
+  const idx = Number(choice) - 1;
+  const group = groups[idx];
+  if (!group) throw new Error("Неверный номер");
+  const data = await api(`/api/source-groups/${group.id}/channels`, {
+    method: "POST",
+    body: JSON.stringify({ channel_ids: ids }),
+  });
+  toast(`Добавлено в «${group.name}»: ${data.added || 0}`);
+  await loadUserGroups();
+}
 
 // ---- Telegram account ------------------------------------------------------
 
@@ -611,12 +744,16 @@ function renderBots() {
     return;
   }
   $("bots-list").innerHTML = bots
-    .map((bot) => `
+    .map((bot) => {
+      const identity = bot.bot_username
+        ? `@${bot.bot_username}${bot.bot_first_name ? ` · ${bot.bot_first_name}` : ""}`
+        : bot.bot_first_name || "";
+      return `
       <article class="card">
         <header class="card-head">
           <div>
             <div class="item-title">${escapeHtml(bot.label)}</div>
-            <div class="item-meta">${escapeHtml(bot.kind)} · ${bot.enabled ? "включён" : "выключен"}</div>
+            <div class="item-meta">${escapeHtml(bot.kind)} · ${bot.enabled ? "включён" : "выключен"}${identity ? ` · ${escapeHtml(identity)}` : ""}</div>
           </div>
           <span class="tag ${bot.enabled ? "loaded" : ""}">${bot.kind}</span>
         </header>
@@ -629,10 +766,13 @@ function renderBots() {
           <button type="button" data-bot-edit-token="${bot.id}">Токен</button>
           <button type="button" data-bot-edit-chat="${bot.id}">Чат</button>
           <button type="button" data-bot-edit-label="${bot.id}">Имя</button>
+          ${bot.kind === "bot_api" ? `<button type="button" data-bot-getme="${bot.id}">getMe</button>` : ""}
+          <button type="button" data-bot-targets="${bot.id}">Целевые чаты</button>
           <button type="button" data-bot-remove="${bot.id}" class="danger">Удалить</button>
         </footer>
       </article>
-    `)
+    `;
+    })
     .join("");
 }
 
@@ -686,6 +826,78 @@ async function removeBot(id) {
 }
 
 pageLoaders.bots = loadBots;
+
+// ---- Bot identity / targets ----------------------------------------------
+
+let botTargetsState = { botId: null, targets: [] };
+
+async function botGetMe(botId) {
+  const data = await api(`/api/posting/bots/${botId}/getme`, { method: "POST", body: "{}" });
+  const me = data.me || {};
+  toast(`getMe OK: @${me.username || "?"}`);
+  await loadBots();
+}
+
+function renderBotTargets() {
+  const container = $("bot-targets-list");
+  if (!container) return;
+  const targets = botTargetsState.targets || [];
+  if (!targets.length) {
+    container.innerHTML = `<div class="notice">Чатов пока нет.</div>`;
+    return;
+  }
+  container.innerHTML = targets
+    .map((t) => `
+      <div class="item">
+        <div>
+          <div class="item-title">${escapeHtml(t.title || t.chat_id)}</div>
+          <div class="item-meta">${escapeHtml(t.chat_id)}${t.added_at ? ` · ${escapeHtml(fmtDate(t.added_at))}` : ""}</div>
+        </div>
+        <div class="item-actions">
+          <button type="button" data-bot-target-remove="${t.id}" class="danger">×</button>
+        </div>
+      </div>
+    `)
+    .join("");
+}
+
+async function openBotTargets(botId) {
+  botTargetsState.botId = Number(botId);
+  const bot = (store.get("bots") || []).find((b) => String(b.id) === String(botId));
+  $("bot-targets-title").textContent = `Целевые чаты — ${bot?.label || `#${botId}`}`;
+  $("bot-targets-panel").hidden = false;
+  $("bot-targets-panel").scrollIntoView({ behavior: "smooth" });
+  await reloadBotTargets();
+}
+
+async function reloadBotTargets() {
+  if (!botTargetsState.botId) return;
+  const data = await api(`/api/posting/bots/${botTargetsState.botId}/targets`);
+  botTargetsState.targets = data.targets || [];
+  renderBotTargets();
+}
+
+async function addBotTarget() {
+  const chat = $("new-bot-target-chat").value.trim();
+  if (!chat) throw new Error("Укажи chat_id");
+  if (!botTargetsState.botId) throw new Error("Сначала открой бота");
+  await api(`/api/posting/bots/${botTargetsState.botId}/targets`, {
+    method: "POST",
+    body: JSON.stringify({ chat_id: chat, title: $("new-bot-target-title").value.trim() || undefined }),
+  });
+  $("new-bot-target-chat").value = "";
+  $("new-bot-target-title").value = "";
+  toast("Чат добавлен");
+  await reloadBotTargets();
+}
+
+async function removeBotTarget(targetId) {
+  if (!botTargetsState.botId) return;
+  if (!window.confirm("Удалить чат?")) return;
+  await api(`/api/posting/bots/${botTargetsState.botId}/targets/${targetId}`, { method: "DELETE" });
+  toast("Удалено");
+  await reloadBotTargets();
+}
 
 // ---- Prompts ---------------------------------------------------------------
 
@@ -1402,9 +1614,21 @@ function wireEvents() {
   $("tg-add-selected-btn").addEventListener("click", (e) => withBusy(e.target, addSelectedTelegramChannels).catch(() => {}));
   $("tg-channels-search").addEventListener("input", debounce((e) => { tgChannelsView.filter = e.target.value; renderTelegramChannels(); }, 200));
 
+  // User-defined source groups
+  const groupNewBtn = $("sources-group-new-btn");
+  if (groupNewBtn) groupNewBtn.addEventListener("click", (e) => withBusy(e.target, createUserGroup).catch(() => {}));
+  const bulkGroupBtn = $("sources-bulk-group-btn");
+  if (bulkGroupBtn) bulkGroupBtn.addEventListener("click", (e) => withBusy(e.target, bulkAddToGroup).catch(() => {}));
+
   // Bots
   $("bots-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadBots).catch(() => {}));
   $("new-bot-add-btn").addEventListener("click", (e) => withBusy(e.target, addBot).catch(() => {}));
+
+  // Bot targets panel
+  const targetsCloseBtn = $("bot-targets-close-btn");
+  if (targetsCloseBtn) targetsCloseBtn.addEventListener("click", () => { $("bot-targets-panel").hidden = true; });
+  const targetsAddBtn = $("new-bot-target-add-btn");
+  if (targetsAddBtn) targetsAddBtn.addEventListener("click", (e) => withBusy(e.target, addBotTarget).catch(() => {}));
 
   // Prompts
   $("prompts-refresh-btn").addEventListener("click", (e) => withBusy(e.target, loadPrompts).catch(() => {}));
@@ -1506,6 +1730,44 @@ function wireEvents() {
     else if (d.pipelineEdit) editPipeline(d.pipelineEdit).catch((err) => toast(err.message));
     else if (d.pipelineRemove) removePipeline(d.pipelineRemove).catch((err) => toast(err.message));
     else if (d.runOpen) openRunDetail(d.runOpen).catch((err) => toast(err.message));
+    else if (d.botGetme) botGetMe(d.botGetme).catch((err) => toast(err.message));
+    else if (d.botTargets) openBotTargets(d.botTargets).catch((err) => toast(err.message));
+    else if (d.botTargetRemove) removeBotTarget(d.botTargetRemove).catch((err) => toast(err.message));
+    else if (d.userGroup) {
+      sourcesView.group = `usr:${d.userGroup}`;
+      // pick the channel ids that belong to this group, then filter the table
+      api(`/api/source-groups/${d.userGroup}/channels`)
+        .then((r) => {
+          const set = new Set(r.channel_ids || []);
+          const all = store.get("sources") || [];
+          const filtered = all.filter((s) => set.has(s.channel_id));
+          renderSourcesGroups(all);
+          renderUserGroups();
+          // override the table to show only this group's members
+          $("sources-count").textContent = `Группа: ${filtered.length} / ${all.length}`;
+          $("sources-tbody").innerHTML = filtered.length
+            ? filtered.map((r) => {
+                const stats = r.stats || {};
+                const checked = sourcesView.selected.has(r.channel_id) ? "checked" : "";
+                return `<tr>
+                  <td><input type="checkbox" data-source-check="${r.channel_id}" ${checked} /></td>
+                  <td><div class="item-title">${escapeHtml(sourceTitle(r))}</div><div class="item-meta">${escapeHtml(r.username || "")}</div></td>
+                  <td><span class="tag">${escapeHtml(r.source_type || "—")}</span></td>
+                  <td class="num">${stats.total ?? 0}</td>
+                  <td class="num">${stats.week_count ?? 0}</td>
+                  <td>${escapeHtml(fmtDate(stats.latest_date))}</td>
+                  <td class="row-actions">
+                    <button type="button" data-source-parse="${r.channel_id}">Парсить</button>
+                    <button type="button" data-source-remove="${r.channel_id}" class="danger">Удалить</button>
+                  </td>
+                </tr>`;
+              }).join("")
+            : `<tr><td colspan="7"><div class="notice">В группе пусто.</div></td></tr>`;
+        })
+        .catch((err) => toast(err.message));
+    }
+    else if (d.userGroupRename) renameUserGroup(d.userGroupRename).catch((err) => toast(err.message));
+    else if (d.userGroupRemove) removeUserGroup(d.userGroupRemove).catch((err) => toast(err.message));
   });
 }
 

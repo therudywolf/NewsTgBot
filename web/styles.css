@@ -688,3 +688,21 @@ details.panel summary:hover { color: var(--accent); }
 @media (max-width: 700px) {
   .news-thumb { width: 80px; height: 60px; }
 }
+
+/* Sparkline for dashboard hourly histogram */
+.sparkline {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 60px;
+  padding: 8px 10px 4px;
+  border-bottom: 1px solid var(--border, #2a2a35);
+}
+.sparkline .spark-bar {
+  flex: 1 1 auto;
+  background: var(--accent, #5dd2a2);
+  opacity: 0.8;
+  min-height: 2px;
+  border-radius: 2px 2px 0 0;
+}
+.sparkline .spark-bar:hover { opacity: 1; }

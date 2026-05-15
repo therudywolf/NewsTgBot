@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>NewsTgBot Admin</title>
-    <link rel="stylesheet" href="static/styles.css?v=20260514-2" />
+    <link rel="stylesheet" href="static/styles.css?v=20260515-1" />
   </head>
   <body>
     <div id="auth-shell" class="auth-shell">
@@ -106,8 +106,12 @@
             <aside class="panel sources-tree">
               <div class="panel-head">
                 <h3>Группы</h3>
+                <button id="sources-group-new-btn" type="button" title="Создать группу">+</button>
               </div>
+              <div class="item-meta" style="padding: 4px 10px">По типу</div>
               <div id="sources-groups" class="list compact"></div>
+              <div class="item-meta" style="padding: 8px 10px 4px">Свои группы</div>
+              <div id="user-source-groups" class="list compact"></div>
             </aside>
 
             <section class="panel">
@@ -117,6 +121,7 @@
                   <span id="sources-count" class="item-meta"></span>
                 </div>
                 <div class="inline-controls">
+                  <button id="sources-bulk-group-btn" type="button">В группу…</button>
                   <button id="sources-bulk-parse-btn" type="button">Парсить выбранные</button>
                   <button id="sources-bulk-delete-btn" type="button" class="danger">Удалить</button>
                 </div>
@@ -253,6 +258,27 @@
           </section>
 
           <div id="bots-list" class="card-grid"></div>
+
+          <section class="panel" id="bot-targets-panel" hidden>
+            <div class="panel-head">
+              <h3 id="bot-targets-title">Целевые чаты</h3>
+              <button id="bot-targets-close-btn" type="button">Закрыть</button>
+            </div>
+            <div class="form-grid">
+              <label>
+                Chat id (@channel или -100…)
+                <input id="new-bot-target-chat" placeholder="@my_channel" />
+              </label>
+              <label>
+                Подпись (опционально)
+                <input id="new-bot-target-title" placeholder="например: Main" />
+              </label>
+            </div>
+            <div class="button-row">
+              <button id="new-bot-target-add-btn" type="button">+ Добавить чат</button>
+            </div>
+            <div id="bot-targets-list" class="list compact"></div>
+          </section>
         </section>
 
         <!-- ============================= PROMPTS ============================= -->
@@ -600,6 +626,6 @@
     </div>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="static/app.js?v=20260514-2"></script>
+    <script src="static/app.js?v=20260515-1"></script>
   </body>
 </html>
