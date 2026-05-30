@@ -10,6 +10,8 @@ services:
     build: .
     container_name: news-tg-bot-panel
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     expose:
       - "8000"
     networks: [default, edge]
@@ -49,6 +51,8 @@ services:
     build: .
     container_name: news-tg-bot-worker
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     networks: [default]
     volumes:
       - ./data:/app/data
