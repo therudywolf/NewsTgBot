@@ -1,10 +1,20 @@
+name: newsbot
+
+# Single canonical compose for the server deployment. The former
+# docker-compose.server.yml / .local.yml overlays are folded in / dropped.
 services:
+  # Web admin panel — reached by Caddy on `edge` by container_name
+  # (news-tg-bot-panel). Service key `panel` is internal-only as an alias and
+  # is not resolved by any consumer, so it does not need renaming.
   panel:
     build: .
     container_name: news-tg-bot-panel
     restart: unless-stopped
     expose:
       - "8000"
+    networks: [default, edge]
+    environment:
+      ADMIN_HTTPS_ONLY: "true"
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -19,18 +29,47 @@ services:
         "--proxy-headers",
         "--forwarded-allow-ips=*"
       ]
+    cpu_shares: 1024
+    mem_limit: 192m
+    mem_reservation: 48m
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/health"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # Telegram worker (internal only — fetches/posts news).
   bot:
     build: .
     container_name: news-tg-bot-worker
     restart: unless-stopped
+    networks: [default]
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
     command: ["python", "run_bot.py"]
+    cpu_shares: 1024
+    mem_limit: 256m
+    mem_reservation: 48m
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /app/data/news_bot.db || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  edge:
+    external: true
+    name: edge
